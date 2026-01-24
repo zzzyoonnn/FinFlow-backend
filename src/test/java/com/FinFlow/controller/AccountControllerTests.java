@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.FinFlow.config.dummy.DummyObject;
 import com.FinFlow.domain.Account;
+import com.FinFlow.domain.Transaction;
 import com.FinFlow.domain.User;
 import com.FinFlow.dto.account.AccountReqDTO.AccountDepositReqDTO;
 import com.FinFlow.dto.account.AccountReqDTO.AccountSaveReqDto;
@@ -15,6 +16,7 @@ import com.FinFlow.dto.account.AccountReqDTO.AccountTransferReqDTO;
 import com.FinFlow.dto.account.AccountReqDTO.AccountWithdrawReqDTO;
 import com.FinFlow.handler.ex.CustomApiException;
 import com.FinFlow.repository.AccountRepository;
+import com.FinFlow.repository.TransactionRepository;
 import com.FinFlow.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -30,6 +32,7 @@ import org.springframework.security.test.context.support.WithUserDetails;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
 import org.springframework.transaction.annotation.Transactional;
 
 @Transactional
@@ -51,20 +54,42 @@ public class AccountControllerTests extends DummyObject {
   private AccountRepository accountRepository;
 
   @Autowired
+  private TransactionRepository transactionRepository;
+
+  @Autowired
   private EntityManager entityManager;
 
   @BeforeEach
   public void setUp() throws Exception {
-    User test = userRepository.save(newUser("test", "test"));
-    User test2 = userRepository.save(newUser("test2", "test2"));
-    Account testAccount = accountRepository.save(newAccount("1111111111", test));
-    Account test2Account = accountRepository.save(newAccount("2222222222", test2));
-
+    dataSetting();
     entityManager.clear();
   }
 
+  private void dataSetting() {
+    User Alice = userRepository.save(newUser("Alice", "Alice"));
+    User Bob = userRepository.save(newUser("Bob", "Bob"));
+    User Charlie = userRepository.save(newUser("Charlie", "Charlie"));
+    User Admin = userRepository.save(newUser("Admin", "Admin"));
+
+    Account alicesAccount = accountRepository.save(newAccount("1111111111", Alice));
+    Account bobAccount = accountRepository.save(newAccount("2222222222", Bob));
+    Account charlieAccount = accountRepository.save(newAccount("3333333333", Charlie));
+    Account adminAccount = accountRepository.save(newAccount("4444444444", Admin));
+
+    Transaction withdrawTransaction1 = transactionRepository
+            .save(newWithdrawTransaction(alicesAccount, accountRepository));
+    Transaction depositTransaction1 = transactionRepository
+            .save(newDepositTransaction(bobAccount, accountRepository));
+    Transaction transferTransaction1 = transactionRepository
+            .save(newTransferTransaction(alicesAccount, bobAccount, accountRepository));
+    Transaction transferTransaction2 = transactionRepository
+            .save(newTransferTransaction(alicesAccount, charlieAccount, accountRepository));
+    Transaction transferTransaction3 = transactionRepository
+            .save(newTransferTransaction(bobAccount, alicesAccount, accountRepository));
+  }
+
   @Test
-  @WithUserDetails(value = "test", setupBefore = TestExecutionEvent.TEST_EXECUTION)
+  @WithUserDetails(value = "Alice", setupBefore = TestExecutionEvent.TEST_EXECUTION)
   public void saveAccount_test() throws Exception {
     // given
     AccountSaveReqDto accountSaveReqDto = new AccountSaveReqDto();
@@ -84,7 +109,7 @@ public class AccountControllerTests extends DummyObject {
   }
 
   @Test
-  @WithUserDetails(value = "test", setupBefore = TestExecutionEvent.TEST_EXECUTION)
+  @WithUserDetails(value = "Alice", setupBefore = TestExecutionEvent.TEST_EXECUTION)
   public void findUserAccount_test() throws Exception {
     // given
 
@@ -98,7 +123,7 @@ public class AccountControllerTests extends DummyObject {
   }
 
   @Test
-  @WithUserDetails(value = "test", setupBefore = TestExecutionEvent.TEST_EXECUTION)
+  @WithUserDetails(value = "Alice", setupBefore = TestExecutionEvent.TEST_EXECUTION)
   public void deleteAccount_test() throws Exception {
     // given
     String number = "1111111111";
@@ -138,7 +163,7 @@ public class AccountControllerTests extends DummyObject {
   }
 
   @Test
-  @WithUserDetails(value = "test", setupBefore = TestExecutionEvent.TEST_EXECUTION)
+  @WithUserDetails(value = "Alice", setupBefore = TestExecutionEvent.TEST_EXECUTION)
   public void withdrawAccount_test() throws Exception {
     // given
     AccountWithdrawReqDTO accountWithdrawReqDTO = new AccountWithdrawReqDTO();
@@ -161,7 +186,7 @@ public class AccountControllerTests extends DummyObject {
   }
 
   @Test
-  @WithUserDetails(value = "test", setupBefore = TestExecutionEvent.TEST_EXECUTION)
+  @WithUserDetails(value = "Alice", setupBefore = TestExecutionEvent.TEST_EXECUTION)
   public void transferAccount_test() throws Exception {
     // given
     AccountTransferReqDTO accountTransferReqDTO = new AccountTransferReqDTO();
@@ -182,5 +207,25 @@ public class AccountControllerTests extends DummyObject {
 
     // then
     resultActions.andExpect(status().isCreated());
+  }
+
+  @Test
+  @WithUserDetails(value = "Alice", setupBefore = TestExecutionEvent.TEST_EXECUTION)
+  public void findDetailAccount_test() throws Exception {
+    // given
+    String number = "1111111111";
+    String page = "0";
+
+    // when
+    ResultActions resultActions = mockMvc
+            .perform(get("/api/s/account/" + number).param("page", page));
+    String responseBody = resultActions.andReturn().getResponse().getContentAsString();
+    System.out.println(responseBody);
+
+    // then
+    resultActions.andExpect(MockMvcResultMatchers.jsonPath("$.data.transactionList[0].balance").value(900L));
+    resultActions.andExpect(MockMvcResultMatchers.jsonPath("$.data.transactionList[1].balance").value(800L));
+    resultActions.andExpect(MockMvcResultMatchers.jsonPath("$.data.transactionList[2].balance").value(700L));
+    resultActions.andExpect(MockMvcResultMatchers.jsonPath("$.data.transactionList[3].balance").value(800L));
   }
 }

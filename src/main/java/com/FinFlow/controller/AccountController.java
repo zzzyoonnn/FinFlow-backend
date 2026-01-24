@@ -7,6 +7,7 @@ import com.FinFlow.dto.account.AccountReqDTO.AccountDepositReqDTO;
 import com.FinFlow.dto.account.AccountReqDTO.AccountSaveReqDto;
 import com.FinFlow.dto.account.AccountReqDTO.AccountWithdrawReqDTO;
 import com.FinFlow.dto.account.AccountRespDTO.AccountDepositRespDTO;
+import com.FinFlow.dto.account.AccountRespDTO.AccountDetailRespDto;
 import com.FinFlow.dto.account.AccountRespDTO.AccountListRespDTO;
 import com.FinFlow.dto.account.AccountRespDTO.AccountSaveRespDto;
 import com.FinFlow.dto.account.AccountRespDTO.AccountTransferRespDTO;
@@ -24,6 +25,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -75,5 +77,14 @@ public class AccountController {
     AccountTransferRespDTO accountTransferRespDTO = accountService.transferAccount(accountTransferReqDTO, loginUser.getUser().getId());
 
     return new ResponseEntity<>(new ResponseDTO<>(1, "계좌 이체 완료", accountTransferRespDTO), HttpStatus.CREATED);
+  }
+
+  @GetMapping("/s/account/{number}")
+  public ResponseEntity<?> findDetailAccount(@PathVariable String number,
+                                             @RequestParam(value = "page", defaultValue = "0") Integer page,
+                                             @AuthenticationPrincipal LoginUser loginUser) {
+    AccountDetailRespDto accountDetailRespDto = accountService.findAccountById(number, loginUser.getUser().getId(),
+            page);
+    return new ResponseEntity<>(new ResponseDTO<>(1, "계좌상세보기 성공", accountDetailRespDto), HttpStatus.OK);
   }
 }

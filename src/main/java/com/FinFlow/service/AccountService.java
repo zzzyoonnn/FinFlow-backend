@@ -9,6 +9,7 @@ import com.FinFlow.dto.account.AccountReqDTO.AccountSaveReqDto;
 import com.FinFlow.dto.account.AccountReqDTO.AccountTransferReqDTO;
 import com.FinFlow.dto.account.AccountReqDTO.AccountWithdrawReqDTO;
 import com.FinFlow.dto.account.AccountRespDTO.AccountDepositRespDTO;
+import com.FinFlow.dto.account.AccountRespDTO.AccountDetailRespDto;
 import com.FinFlow.dto.account.AccountRespDTO.AccountListRespDTO;
 import com.FinFlow.dto.account.AccountRespDTO.AccountSaveRespDto;
 import com.FinFlow.dto.account.AccountRespDTO.AccountTransferRespDTO;
@@ -17,17 +18,9 @@ import com.FinFlow.handler.ex.CustomApiException;
 import com.FinFlow.repository.AccountRepository;
 import com.FinFlow.repository.TransactionRepository;
 import com.FinFlow.repository.UserRepository;
-import jakarta.persistence.Column;
-import jakarta.validation.constraints.Digits;
-import jakarta.validation.constraints.NotEmpty;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
 import java.util.List;
 import java.util.Optional;
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import lombok.Setter;
-import org.apache.catalina.util.CustomObjectInputStream;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -212,5 +205,19 @@ public class AccountService {
 
     // Return DTO response
     return new AccountTransferRespDTO(withdrawAccount, saveTransaction);
+  }
+
+  public AccountDetailRespDto findAccountById(String number, Long userId, Integer page) {
+    String transactionType = "ALL";
+
+    Account account = accountRepository.findByNumber(number).orElseThrow(
+            () -> new CustomApiException("계좌를 찾을 수 없습니다.")
+    );
+
+    account.checkOwner(userId);
+
+    List<Transaction> transactionList = transactionRepository.findTransactionList(account.getId(), transactionType, page);
+
+    return new AccountDetailRespDto(account, transactionList);
   }
 }
