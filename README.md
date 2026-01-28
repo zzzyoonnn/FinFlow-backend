@@ -4,7 +4,8 @@ A personal Spring Boot project implementing core banking features like deposit, 
 
 ## Table of Contents
 - [About](#about)
-- [Features](#features)
+- [Structure](#structure)
+- [Features](#seatures)
 - [Tech Stack](#tech-stack)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -20,6 +21,14 @@ It allows users to perform basic banking operations, including:
 - Transfers
 
 This project demonstrates core financial transaction logic and serves as a portfolio project.
+
+
+## Structure
+- Backend: Spring Boot (API, Domain, DB)
+    - Repository: https://github.com/zzzyoonnn/FinFlow-backend
+- Frontend: React + Vite
+    - Repository: https://github.com/zzzyoonnn/FinFlow-frontend
+
 
 
 ## Features
