@@ -85,7 +85,7 @@ public class SecurityConfig {
     configuration.addAllowedMethod("*");        // 모든 HTTP 메서드 허용
 
     // Method
-    configuration.addAllowedOriginPattern("*"); // 모든 도메인 허용
+    configuration.addAllowedOriginPattern("http://localhost:3000");
 
     // Header
     configuration.addAllowedHeader("*");        // 모든 헤더 허용
