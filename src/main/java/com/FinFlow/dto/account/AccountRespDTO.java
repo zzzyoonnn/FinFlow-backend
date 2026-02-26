@@ -202,7 +202,7 @@ public class AccountRespDTO {
       private Long amount;
 
       private String sender;
-      private String reciver;
+      private String receiver;
 
       private String tel;
       private String createdAt;
@@ -213,7 +213,7 @@ public class AccountRespDTO {
         this.transactionType = transaction.getTransaction_type().getValue();
         this.amount = transaction.getAmount();
         this.sender = transaction.getSender();
-        this.reciver = transaction.getReceiver();
+        this.receiver = transaction.getReceiver();
         this.createdAt = CustomDateUtil.toStringFormat(transaction.getCreatedAt());
         this.tel = transaction.getTel() == null ? "없음" : transaction.getTel();
 
