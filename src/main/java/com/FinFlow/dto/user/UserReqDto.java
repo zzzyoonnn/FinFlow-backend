@@ -2,6 +2,7 @@ package com.FinFlow.dto.user;
 
 import com.FinFlow.domain.User;
 import com.FinFlow.domain.UserEnum;
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -34,7 +35,7 @@ public class UserReqDto {
 
     // 이메일 형식
     @NotEmpty
-    @Pattern(regexp = "^[a-zA-Z0-9]+@[a-zA-Z0-9]{2,4}\\.[a-zA-Z]{2,3}$", message = "Please enter a valid email address.")
+    @Email(message = "Please enter a valid email address.")
     private String email;
 
     // 영어, 한글, 1~20
