@@ -45,30 +45,4 @@
 
 ## 🗂 ERD (Entity Relationship Diagram)
 
-```mermaid
-erDiagram
-    USER ||--o{ ACCOUNT : owns
-    ACCOUNT ||--o{ ACCOUNT_TRANSACTION : participates_in
-
-    USER {
-        BIGINT id PK
-        VARCHAR username
-        VARCHAR password
-        VARCHAR full_name
-    }
-
-    ACCOUNT {
-        BIGINT id PK
-        VARCHAR number
-        BIGINT balance
-        BIGINT user_id FK
-    }
-
-    ACCOUNT_TRANSACTION {
-        BIGINT id PK
-        BIGINT amount
-        VARCHAR transaction_type
-        BIGINT withdraw_account_id FK
-        BIGINT deposit_account_id FK
-    }
-```
+![ERD](/docs/architecture/erd.png)
