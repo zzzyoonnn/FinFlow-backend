@@ -1,51 +1,119 @@
-# FinFlow💸
-A personal Spring Boot project implementing core banking features like deposit, withdrawal, and transfer.
+# FinFlow 💸
 
+Spring Boot 기반의 금융 거래 API입니다. 계좌 생성, 입금, 출금, 이체 기능을 제공하며, 금융 도메인에서 중요한 데이터 정합성과 신뢰성 있는 거래 처리를 단계적으로 강화하는 것을 목표로 합니다.
 
-## Table of Contents
-- [About](#about)
-- [Structure](#structure)
-- [Features](#seatures)
-- [Tech Stack](#tech-stack)
-- [Installation](#installation)
-- [Usage](#usage)
-- [License](#license)
+## 목차
 
+- [프로젝트 소개](#프로젝트-소개)
+- [주요 기능](#주요-기능)
+- [기술 스택](#기술-스택)
+- [아키텍처](#아키텍처)
+- [현재 거래 처리 방식](#현재-거래-처리-방식)
+- [구현 예정 로드맵](#구현-예정-로드맵)
+- [테스트 전략](#테스트-전략)
+- [개발 환경](#개발-환경)
 
-## About
-FinFlow is a simple banking system built with Spring Boot.
+## 프로젝트 소개
 
-It allows users to perform basic banking operations, including:
-- Deposits
-- Withdrawals
-- Transfers
+FinFlow는 기본적인 은행 업무를 구현한 개인 포트폴리오 프로젝트입니다. 단순 CRUD를 넘어, 이체 과정에서 발생할 수 있는 부분 성공, 동시 요청 충돌, 중복 요청 처리 문제를 해결하는 과정을 담습니다.
 
-This project demonstrates core financial transaction logic and serves as a portfolio project.
+핵심 원칙은 다음과 같습니다.
 
+- 잔액과 거래내역의 정합성은 데이터베이스가 최종 보장한다.
+- 중복 요청은 멱등성 키(Idempotency-Key)로 한 번만 처리한다.
+- 거래 완료 후의 부가 작업은 이벤트 기반으로 분리한다.
 
-## Structure
-- Backend: Spring Boot (API, Domain, DB)
-    - Repository: https://github.com/zzzyoonnn/FinFlow-backend
-- Frontend: React + Vite
-    - Repository: https://github.com/zzzyoonnn/FinFlow-frontend
+## 주요 기능
 
+- 회원가입 및 JWT 기반 인증
+- 계좌 생성, 조회, 삭제
+- 입금 및 출금
+- 계좌 간 이체
+- 계좌별 거래내역 조회
+- 요청값 검증 및 공통 예외 응답
 
+## 기술 스택
 
-## Features
-- Account creation
-- Deposit money into account
-- Withdraw money from account
-- Transfer money between accounts
-- JWT-based authentication
-- Basic validation for transactions
+| 구분 | 기술 |
+| --- | --- |
+| Language | Java 21 |
+| Framework | Spring Boot 3.5.7 |
+| Persistence | Spring Data JPA, QLRM |
+| Security | Spring Security, JWT |
+| Database | H2 (개발/기본 테스트), MySQL (운영 프로필) |
+| Test | JUnit 5, Mockito, Spring Boot Test |
+| 예정 | Docker Compose, Redis, Apache Kafka |
 
+## 아키텍처
 
-## Tech Stack
-- Java 21
-- Spring Boot 3.5.7
-- Spring Data JPA
-- Spring Security(JWT)
-- H2 Database(for development/testing)
-- MySQL(for production)
-- Lombok
-- QLRM (Native query to DTO mapping)
+레이어드 아키텍처를 적용했습니다.
+
+```text
+Client
+  → Controller: HTTP 요청·응답, 인증 사용자 식별
+  → Service: 비즈니스 규칙, 트랜잭션 경계
+  → Repository: JPA 기반 영속성 처리
+  → Database: 계좌 잔액과 거래내역의 최종 저장소
+```
+
+쓰기 작업은 `AccountService`가 담당합니다. 계좌 생성, 입금, 출금, 이체 메서드는 서비스 계층에서 처리됩니다.
+
+## 현재 거래 처리 방식
+
+입금, 출금, 이체 메서드에는 Spring의 `@Transactional`이 적용되어 있습니다. 이체의 처리 단위는 다음과 같습니다.
+
+```text
+요청 검증 및 계좌 소유자 확인
+  → 잔액 검증
+  → 출금 계좌 잔액 감소
+  → 입금 계좌 잔액 증가
+  → 거래내역 저장
+  → 커밋
+```
+
+처리 중 예외가 발생하면 계좌 잔액 변경과 거래내역 저장이 함께 롤백되어야 합니다. 현재 정상 입·출금·이체 흐름을 검증하는 테스트는 존재하지만, 실제 데이터베이스에서 실패 롤백을 검증하는 통합 테스트는 추가 구현이 필요합니다.
+
+## 구현 예정 로드맵
+
+금융 거래의 신뢰성을 아래 순서로 강화할 예정입니다.
+
+### 1. DB 트랜잭션과 실패 롤백 테스트 구현 예정
+
+- 거래내역 저장 실패 등 예외 상황에서 출금·입금 잔액과 거래내역이 모두 롤백되는지 통합 테스트로 검증합니다.
+- 단위 테스트가 아닌 실제 관계형 데이터베이스 환경에서 커밋과 롤백을 확인합니다.
+
+### 2. 계좌 잠금 기반 동시성 제어와 동시 요청 테스트 구현 예정
+
+- 동일 계좌에 동시에 출금 또는 이체 요청이 들어올 때 잔액이 잘못 계산되는 문제를 방지합니다.
+- 계좌 행에 비관적 락(Pessimistic Write Lock)을 적용합니다.
+- MySQL 환경에서 다수의 동시 이체 요청을 실행하는 통합 테스트를 작성합니다.
+
+### 3. Idempotency-Key와 DB 유니크 제약 구현 예정
+
+- 클라이언트가 네트워크 오류로 같은 이체 요청을 재시도해도 거래가 한 번만 처리되도록 합니다.
+- 요청마다 `Idempotency-Key`를 전달받습니다.
+- 멱등성 기록 테이블의 유니크 제약조건으로 중복 처리를 데이터베이스에서 최종 방지합니다.
+
+### 4. Redis를 이용한 진행 중 요청 차단과 응답 캐시 구현 예정
+
+- Redis의 `SET NX`를 사용해 같은 멱등성 키의 요청이 동시에 처리되는 것을 차단합니다.
+- 완료된 요청의 결과를 캐시해 재시도 요청에 같은 응답을 빠르게 반환합니다.
+- Redis는 보조 계층이며, TTL 만료 또는 장애가 발생해도 DB 유니크 제약조건이 최종 중복 방지 장치로 동작하도록 설계합니다.
+
+### 5. Kafka와 Transactional Outbox 기반 거래 이벤트 처리 구현 예정
+
+- 거래가 데이터베이스에 정상 커밋된 뒤에만 `TransactionCompleted` 이벤트를 발행합니다.
+- 알림, 감사 로그, 통계, 이상 거래 탐지 같은 후속 작업을 API 요청 처리와 분리합니다.
+- Transactional Outbox 패턴으로 DB 커밋과 메시지 발행 사이의 불일치 문제를 줄입니다.
+
+## 테스트 전략
+
+| 범위 | 검증 대상 | 예정 환경 |
+| --- | --- | --- |
+| 단위 테스트 | 도메인 규칙, 서비스 분기 | JUnit 5, Mockito |
+| DB 통합 테스트 | 커밋, 롤백, JPA 매핑, 락 | MySQL 컨테이너 또는 Testcontainers |
+| Redis 통합 테스트 | 멱등성 키 상태, 중복 요청 응답 | Redis 컨테이너 또는 Testcontainers |
+| Kafka 통합 테스트 | 커밋 이후 이벤트 발행·소비 | Kafka 컨테이너 또는 Testcontainers |
+| API 테스트 | 인증, HTTP 상태 코드, 응답 형식 | MockMvc, Postman 또는 Bruno |
+
+H2는 빠른 개발과 기본 테스트에 활용하고, 잠금과 격리 수준처럼 데이터베이스별 동작 차이가 중요한 기능은 MySQL에서 검증할 예정입니다. 외부 배포가 필요해질 경우 AWS RDS를 검토하되, 개발과 포트폴리오 데모 환경은 Docker Compose 기반 로컬 MySQL, Redis, Kafka로 재현 가능하게 구성할 예정입니다.
