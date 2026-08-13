@@ -45,4 +45,13 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	exclude '**/*IntegrationTest.class'
+}
+
+tasks.register('integrationTest', Test) {
+	description = 'Runs tests that require external infrastructure such as MySQL.'
+	group = 'verification'
+	useJUnitPlatform()
+	include '**/*IntegrationTest.class'
+	shouldRunAfter tasks.named('test')
 }
