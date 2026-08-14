@@ -87,7 +87,7 @@ public class AccountService {
     }
 
     // Validate deposit account
-    Account depositAccount = accountRepository.findByNumber(accountDepositReqDTO.getNumber()).orElseThrow(
+    Account depositAccount = accountRepository.findByNumberWithPessimisticWriteLock(accountDepositReqDTO.getNumber()).orElseThrow(
             () -> new CustomApiException("계좌를 찾을 수 없습니다.")
     );
 
@@ -120,7 +120,7 @@ public class AccountService {
     }
 
     // Validate withdraw account(repository)
-    Account withdrawAccount = accountRepository.findByNumber(accountWithdrawReqDTO.getNumber()).orElseThrow(
+    Account withdrawAccount = accountRepository.findByNumberWithPessimisticWriteLock(accountWithdrawReqDTO.getNumber()).orElseThrow(
             () -> new CustomApiException("계좌를 찾을 수 없습니다.")
     );
 
@@ -166,15 +166,19 @@ public class AccountService {
       throw new CustomApiException("0원 이하의 금액을 입금할 수 없습니다.");
     }
 
-    // Validate withdraw account(repository)
-    Account withdrawAccount = accountRepository.findByNumber(accountTransferReqDTO.getWithdrawNumber()).orElseThrow(
-            () -> new CustomApiException("출금 계좌를 찾을 수 없습니다.")
-    );
-
-    // Validate deposit account(repository)
-    Account depositAccount = accountRepository.findByNumber(accountTransferReqDTO.getDepositNumber()).orElseThrow(
-            () -> new CustomApiException("입금 계좌를 찾을 수 없습니다.")
-    );
+    Account withdrawAccount;
+    Account depositAccount;
+    if (accountTransferReqDTO.getWithdrawNumber().compareTo(accountTransferReqDTO.getDepositNumber()) < 0) {
+      withdrawAccount = accountRepository.findByNumberWithPessimisticWriteLock(accountTransferReqDTO.getWithdrawNumber())
+              .orElseThrow(() -> new CustomApiException("출금 계좌를 찾을 수 없습니다."));
+      depositAccount = accountRepository.findByNumberWithPessimisticWriteLock(accountTransferReqDTO.getDepositNumber())
+              .orElseThrow(() -> new CustomApiException("입금 계좌를 찾을 수 없습니다."));
+    } else {
+      depositAccount = accountRepository.findByNumberWithPessimisticWriteLock(accountTransferReqDTO.getDepositNumber())
+              .orElseThrow(() -> new CustomApiException("입금 계좌를 찾을 수 없습니다."));
+      withdrawAccount = accountRepository.findByNumberWithPessimisticWriteLock(accountTransferReqDTO.getWithdrawNumber())
+              .orElseThrow(() -> new CustomApiException("출금 계좌를 찾을 수 없습니다."));
+    }
 
     // Verify withdraw account ownership(matches the logged-in user)
     withdrawAccount.checkOwner(userId);
