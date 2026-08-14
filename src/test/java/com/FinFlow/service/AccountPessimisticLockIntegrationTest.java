@@ -12,13 +12,10 @@ import com.FinFlow.handler.ex.CustomApiException;
 import com.FinFlow.repository.AccountRepository;
 import com.FinFlow.repository.TransactionRepository;
 import com.FinFlow.repository.UserRepository;
-import java.util.ArrayList;
+import com.FinFlow.support.ConcurrentTestExecutor;
+import com.FinFlow.support.ConcurrentTestExecutor.ConcurrentExecutionResult;
+import com.FinFlow.support.ConcurrentTestExecutor.ConcurrentOperation;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,6 +44,7 @@ class AccountPessimisticLockIntegrationTest extends DummyObject {
   private Account sourceAccount;
   private Account targetAccount;
   private Long sourceUserId;
+  private final ConcurrentTestExecutor concurrentTestExecutor = new ConcurrentTestExecutor();
 
   @BeforeEach
   void setUp() {
@@ -161,68 +159,20 @@ class AccountPessimisticLockIntegrationTest extends DummyObject {
     return request;
   }
 
-  private ConcurrentExecutionResult executeConcurrently(int requestCount, ConcurrentOperation operation) throws Exception {
-    List<ConcurrentOperation> operations = new ArrayList<>();
-    for (int index = 0; index < requestCount; index++) {
-      operations.add(operation);
-    }
-    return executeConcurrently(operations);
+  private ConcurrentExecutionResult executeConcurrently(int requestCount, Runnable operation) throws Exception {
+    return concurrentTestExecutor.execute(requestCount, startGate -> {
+      startGate.readyAndAwaitStart();
+      operation.run();
+    });
   }
 
-  private ConcurrentExecutionResult executeConcurrently(List<ConcurrentOperation> operations) throws Exception {
-    ExecutorService executorService = Executors.newFixedThreadPool(operations.size());
-    CountDownLatch ready = new CountDownLatch(operations.size());
-    CountDownLatch start = new CountDownLatch(1);
-    List<Future<Throwable>> futures = new ArrayList<>();
-
-    try {
-      for (ConcurrentOperation operation : operations) {
-        futures.add(executorService.submit(() -> {
-          ready.countDown();
-          await(start);
-          try {
-            operation.run();
-            return null;
-          } catch (Throwable throwable) {
-            return throwable;
-          }
-        }));
-      }
-
-      assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
-      long startedAt = System.nanoTime();
-      start.countDown();
-
-      int successCount = 0;
-      List<Throwable> failures = new ArrayList<>();
-      for (Future<Throwable> future : futures) {
-        Throwable failure = future.get(10, TimeUnit.SECONDS);
-        if (failure == null) {
-          successCount++;
-        } else {
-          failures.add(failure);
-        }
-      }
-
-      return new ConcurrentExecutionResult(
-              successCount,
-              failures,
-              TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
-      );
-    } finally {
-      executorService.shutdownNow();
-    }
-  }
-
-  private void await(CountDownLatch latch) {
-    try {
-      if (!latch.await(10, TimeUnit.SECONDS)) {
-        throw new IllegalStateException("동시성 테스트 시작 대기 시간이 초과되었습니다.");
-      }
-    } catch (InterruptedException exception) {
-      Thread.currentThread().interrupt();
-      throw new IllegalStateException("동시성 테스트가 중단되었습니다.", exception);
-    }
+  private ConcurrentExecutionResult executeConcurrently(List<Runnable> operations) throws Exception {
+    return concurrentTestExecutor.execute(operations.stream()
+            .<ConcurrentOperation>map(operation -> startGate -> {
+              startGate.readyAndAwaitStart();
+              operation.run();
+            })
+            .toList());
   }
 
   private void logResult(String scenario, ConcurrentExecutionResult result) {
@@ -235,15 +185,4 @@ class AccountPessimisticLockIntegrationTest extends DummyObject {
     );
   }
 
-  @FunctionalInterface
-  private interface ConcurrentOperation {
-    void run();
-  }
-
-  private record ConcurrentExecutionResult(
-          int successCount,
-          List<Throwable> failures,
-          long elapsedMilliseconds
-  ) {
-  }
 }
