@@ -10,6 +10,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.LocalDateTime;
 import lombok.Builder;
 import lombok.Getter;
@@ -37,6 +38,9 @@ public class Account {
 
   @Column(nullable = false)
   private Long balance;   // 잔액
+
+  @Version
+  private Long version;
 
   @Column(nullable = false)
   private boolean isActive;   // 계좌 활성화 여부
