@@ -31,6 +31,24 @@ services:
       timeout: 3s
       retries: 20
 
+  k6:
+    image: grafana/k6:0.57.0
+    profiles: ["loadtest"]
+    environment:
+      BASE_URL: ${K6_BASE_URL:-http://host.docker.internal:8081}
+      USERNAME: ${K6_USERNAME:-test}
+      PASSWORD: ${K6_PASSWORD:-1234}
+      MODE: ${K6_MODE:-redis}
+      VUS: ${K6_VUS:-20}
+      DURATION: ${K6_DURATION:-30s}
+      IDEMPOTENCY_KEY: ${K6_IDEMPOTENCY_KEY:-k6-idempotency-retry}
+    volumes:
+      - ./loadtest/k6:/scripts:ro
+      - ./loadtest/k6/results:/results
+    command: ["run", "/scripts/idempotency-retry.js"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   finflow-mysql-data:
   finflow-redis-data:
