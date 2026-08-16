@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -29,23 +30,27 @@ public class IdempotentTransferService {
     try {
       return transferTransactionService.execute(idempotencyKey, requestHash, request, userId);
     } catch (DataIntegrityViolationException duplicateKey) {
-      IdempotencyRecord existing = idempotencyRecordRepository.findCompletedByKey(idempotencyKey)
-          .orElseThrow(() -> duplicateKey);
+      return findCompleted(idempotencyKey, requestHash).orElseThrow(() -> duplicateKey);
+    }
+  }
+
+  Optional<AccountTransferRespDTO> findCompleted(String idempotencyKey, String requestHash) {
+    return idempotencyRecordRepository.findCompletedByKey(idempotencyKey).map(existing -> {
       if (!existing.getRequestHash().equals(requestHash)) {
         throw new CustomApiException("Idempotency-Key가 다른 이체 요청에 이미 사용되었습니다.");
       }
       Transaction transaction = existing.getTransaction();
       return new AccountTransferRespDTO(transaction.getWithdrawAccount(), transaction);
-    }
+    });
   }
 
-  private void validateKey(String key) {
+  void validateKey(String key) {
     if (key == null || key.isBlank() || key.length() > 100) {
       throw new CustomApiException("Idempotency-Key는 1자 이상 100자 이하여야 합니다.");
     }
   }
 
-  private String requestHash(AccountTransferReqDTO request, Long userId) {
+  String requestHash(AccountTransferReqDTO request, Long userId) {
     String canonical = userId + "|" + request.getWithdrawNumber() + "|"
         + request.getDepositNumber() + "|" + request.getWithdrawPassword() + "|"
         + request.getAmount() + "|" + request.getTransactionType();
