@@ -13,6 +13,7 @@ import com.FinFlow.dto.account.AccountRespDTO.AccountSaveRespDto;
 import com.FinFlow.dto.account.AccountRespDTO.AccountTransferRespDTO;
 import com.FinFlow.dto.account.AccountRespDTO.AccountWithdrawRespDTO;
 import com.FinFlow.service.AccountService;
+import com.FinFlow.service.IdempotentTransferService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -25,6 +26,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -34,6 +36,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AccountController {
 
   private final AccountService accountService;
+  private final IdempotentTransferService idempotentTransferService;
 
   @PostMapping("/s/account")
   public ResponseEntity<?> saveAccount(@RequestBody @Valid AccountSaveReqDto accountSaveReqDto,
@@ -73,8 +76,12 @@ public class AccountController {
   }
 
   @PostMapping("/s/account/transfer")
-  public ResponseEntity<?> transferAccount(@RequestBody @Valid AccountTransferReqDTO accountTransferReqDTO, BindingResult bindingResult, @AuthenticationPrincipal LoginUser loginUser) {
-    AccountTransferRespDTO accountTransferRespDTO = accountService.transferAccount(accountTransferReqDTO, loginUser.getUser().getId());
+  public ResponseEntity<?> transferAccount(
+      @RequestHeader("Idempotency-Key") String idempotencyKey,
+      @RequestBody @Valid AccountTransferReqDTO accountTransferReqDTO,
+      BindingResult bindingResult, @AuthenticationPrincipal LoginUser loginUser) {
+    AccountTransferRespDTO accountTransferRespDTO = idempotentTransferService.transfer(
+        idempotencyKey, accountTransferReqDTO, loginUser.getUser().getId());
 
     return new ResponseEntity<>(new ResponseDTO<>(1, "계좌 이체 완료", accountTransferRespDTO), HttpStatus.CREATED);
   }

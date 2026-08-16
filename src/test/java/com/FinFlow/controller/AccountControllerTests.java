@@ -200,7 +200,9 @@ public class AccountControllerTests extends DummyObject {
     System.out.println(requestBody);
 
     // when
-    ResultActions resultActions = mockMvc.perform(post("/api/s/account/transfer").content(requestBody).contentType(
+    ResultActions resultActions = mockMvc.perform(post("/api/s/account/transfer")
+            .header("Idempotency-Key", "transfer-test-key")
+            .content(requestBody).contentType(
             MediaType.APPLICATION_JSON));
     String responseBody = resultActions.andReturn().getResponse().getContentAsString();
     System.out.println(responseBody);
