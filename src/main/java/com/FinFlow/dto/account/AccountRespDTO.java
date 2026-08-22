@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 public class AccountRespDTO {
@@ -138,6 +139,7 @@ public class AccountRespDTO {
 
   @Getter
   @Setter
+  @NoArgsConstructor
   public static class AccountTransferRespDTO {
     private Long id;
     private String number;
@@ -153,7 +155,8 @@ public class AccountRespDTO {
 
     @Getter
     @Setter
-    public class TransactionDTO {
+    @NoArgsConstructor
+    public static class TransactionDTO {
       private Long id;
       private String transactionType;
       private String sender;

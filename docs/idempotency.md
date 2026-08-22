@@ -314,7 +314,7 @@ integrationTest --tests "com.FinFlow.service.IdempotentTransferServiceIntegratio
 
 ## 13. k6 HTTP 부하 테스트
 
-[idempotency-retry.js](../loadtest/k6/idempotency-retry.js)는 로그인과 JWT 인증을 포함한 전체 HTTP 경로에서 여러 VU가 동일한 키를 반복 전송하는 상황을 측정한다.
+[idempotency-cache-hit.js](../loadtest/k6/idempotency-cache-hit.js)는 완료된 동일 키의 반복 요청을 측정하고, [idempotency-setnx-race.js](../loadtest/k6/idempotency-setnx-race.js)는 여러 VU가 같은 새 키로 한 번씩 요청하는 최초 경합을 측정한다. 캐시 성능과 `SET NX` 동시 요청 차단 성능이 한 결과에 섞이지 않도록 두 시나리오를 분리했다.
 
 기본 설정은 20 VU, 30초이며 평균, p50, p95, p99, 최대 응답시간, 처리량, 실패율을 출력한다. SQL 콘솔 출력은 결과를 크게 왜곡하므로 비활성화한다.
 
@@ -330,6 +330,7 @@ FINFLOW_IDEMPOTENCY_REDIS_ENABLED=false \
 ```bash
 K6_MODE=db-only \
 K6_IDEMPOTENCY_KEY=k6-db-only \
+K6_SCRIPT=idempotency-cache-hit.js \
 docker compose --profile loadtest run --rm k6
 ```
 
@@ -338,12 +339,24 @@ docker compose --profile loadtest run --rm k6
 ```bash
 K6_MODE=redis \
 K6_IDEMPOTENCY_KEY=k6-redis \
+K6_SCRIPT=idempotency-cache-hit.js \
+docker compose --profile loadtest run --rm k6
+```
+
+Redis 활성화 상태에서 사용한 적 없는 키로 SET NX race를 실행한다.
+
+```bash
+K6_MODE=redis-setnx-race \
+K6_IDEMPOTENCY_KEY=k6-setnx-race-001 \
+K6_VUS=20 \
+K6_SCRIPT=idempotency-setnx-race.js \
 docker compose --profile loadtest run --rm k6
 ```
 
 ```text
 loadtest/k6/results/db-only-summary.json
 loadtest/k6/results/redis-summary.json
+loadtest/k6/results/redis-setnx-race-summary.json
 ```
 
 상세 실행법과 지표 해석은 [k6-load-test.md](k6-load-test.md)에 정리했다.

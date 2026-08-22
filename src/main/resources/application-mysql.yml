@@ -17,12 +17,15 @@ spring:
   data:
     redis:
       host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      port: ${REDIS_PORT:6380}
 
 finflow:
   idempotency:
     redis-enabled: true
     redis-ttl: 24h
+    processing-ttl: 30s
+    wait-timeout: 2s
+    poll-interval: 25ms
 
 logging:
   level:

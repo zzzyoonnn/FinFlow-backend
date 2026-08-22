@@ -21,7 +21,7 @@ services:
     image: redis:7.4-alpine
     container_name: finflow-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - finflow-redis-data:/data
@@ -41,11 +41,12 @@ services:
       MODE: ${K6_MODE:-redis}
       VUS: ${K6_VUS:-20}
       DURATION: ${K6_DURATION:-30s}
+      MAX_DURATION: ${K6_MAX_DURATION:-30s}
       IDEMPOTENCY_KEY: ${K6_IDEMPOTENCY_KEY:-k6-idempotency-retry}
     volumes:
       - ./loadtest/k6:/scripts:ro
       - ./loadtest/k6/results:/results
-    command: ["run", "/scripts/idempotency-retry.js"]
+    command: ["run", "/scripts/${K6_SCRIPT:-idempotency-cache-hit.js}"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
