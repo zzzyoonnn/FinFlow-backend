@@ -61,7 +61,7 @@ Content-Type: application/json
 | --- | --- |
 | [AccountController](../src/main/java/com/FinFlow/controller/AccountController.java) | 헤더와 요청 본문 수신, Redis 우선 서비스 호출 |
 | [RedisIdempotentTransferService](../src/main/java/com/FinFlow/service/RedisIdempotentTransferService.java) | Redis 우선 조회, 캐시 미스·장애 시 DB 경로 호출 |
-| [RedisIdempotencyCache](../src/main/java/com/FinFlow/service/RedisIdempotencyCache.java) | 완료된 키의 요청 해시를 TTL과 함께 저장 |
+| [RedisIdempotencyCache](../src/main/java/com/FinFlow/service/RedisIdempotencyCache.java) | `SET NX` 처리 잠금과 완료 응답 캐시 관리 |
 | [IdempotentTransferService](../src/main/java/com/FinFlow/service/IdempotentTransferService.java) | 키 검증, 요청 해시 계산, DB 중복 충돌 처리 |
 | [TransferTransactionService](../src/main/java/com/FinFlow/service/TransferTransactionService.java) | 멱등성 레코드 선점, 계좌 잠금, 이체와 거래 저장 |
 | [IdempotencyRecordRepository](../src/main/java/com/FinFlow/repository/IdempotencyRecordRepository.java) | 멱등성 레코드 저장 및 완료 결과 조회 |
@@ -69,7 +69,7 @@ Content-Type: application/json
 ```text
 AccountController
   → RedisIdempotentTransferService
-      ├─ Redis 적중 → MySQL에서 기존 거래 조회 → 응답
+      ├─ 완료 응답 적중 → Redis 응답 즉시 반환
       └─ Redis 미스/장애 → IdempotentTransferService
                            → TransferTransactionService
                            → MySQL 트랜잭션 실행
@@ -139,39 +139,51 @@ Redis와 DB에 키가 없는 최초 요청은 다음 순서로 처리한다.
 
 ```text
 1. Idempotency-Key 형식 검증 및 요청 해시 계산
-2. Redis 조회: 캐시 미스
-3. 멱등성 레코드 INSERT 및 saveAndFlush()
-4. 두 계좌를 계좌번호 순서로 비관적 락
-5. 소유자, 비밀번호, 잔액 검증
-6. 출금·입금 계좌 잔액 변경
-7. 거래내역 저장 및 멱등성 레코드에 거래 연결
-8. MySQL 트랜잭션 커밋
-9. Redis에 요청 해시 저장
-10. 거래 결과 응답
+2. Redis 완료 응답 조회: 캐시 미스
+3. 처리 키를 SET NX와 짧은 TTL로 선점
+4. 멱등성 레코드 INSERT 및 saveAndFlush()
+5. 두 계좌를 계좌번호 순서로 비관적 락
+6. 소유자, 비밀번호, 잔액 검증
+7. 출금·입금 계좌 잔액 변경
+8. 거래내역 저장 및 멱등성 레코드에 거래 연결
+9. MySQL 트랜잭션 커밋
+10. Redis에 요청 해시와 완료 응답 저장
+11. 소유자 토큰을 확인해 처리 키 해제
+12. 거래 결과 응답
 ```
 
 멱등성 레코드, 두 계좌 잔액, 거래내역은 하나의 MySQL 트랜잭션으로 처리한다. 어느 단계에서든 예외가 발생하면 모두 롤백되므로 실패한 키만 남거나 잔액만 변경되는 부분 성공을 방지한다.
 
-Redis 저장은 DB 커밋 이후에 수행한다. Redis 저장이 실패해도 거래는 MySQL에 안전하게 기록되어 있고, 다음 재시도는 DB 유니크 제약 경로로 처리된다.
+Redis 완료 응답 저장은 DB 커밋 이후에 수행한다. 저장이 실패해도 거래는 MySQL에 안전하게 기록되어 있고, 다음 재시도는 DB 유니크 제약 경로로 처리된다. 처리 키 해제는 Lua 스크립트로 현재 값과 소유자 토큰을 비교하므로, TTL 만료 뒤 다른 요청이 획득한 잠금을 이전 처리자가 삭제할 수 없다.
 
 ## 8. 중복 요청 처리
 
-### Redis 캐시 적중
+### 완료 응답 캐시 적중
 
-완료된 요청의 키가 Redis에 있으면 유니크 충돌을 발생시키는 INSERT를 생략한다.
+완료된 요청의 키가 Redis에 있으면 DB 접근 없이 최초 API 응답을 역직렬화해 즉시 반환한다.
 
 ```text
-Redis에서 요청 해시 조회
+Redis에서 요청 해시와 완료 응답 조회
   → 현재 요청 해시와 비교
-  → MySQL에서 완료된 거래 조회
   → 최초 거래 결과 반환
 ```
 
-Redis에는 응답 본문이나 거래 원본을 저장하지 않는다. 따라서 캐시가 적중해도 응답 원본은 MySQL에서 조회하며, Redis는 중복 INSERT·예외·롤백 비용을 줄이는 역할만 한다.
+요청 해시가 다르면 캐시된 응답을 반환하지 않고 키 재사용 오류로 거부한다.
 
-### Redis 캐시 미스 또는 비활성화
+### 진행 중 요청
 
-Redis에 키가 없거나 `redis-enabled=false`이면 DB-only 경로를 사용한다.
+완료 응답이 없으면 처리 키에 `SET NX`를 실행한다. 한 요청만 선점에 성공하고, 같은 키로 들어온 나머지 요청은 완료 응답이 생성될 때까지 기본 25ms 간격으로 최대 2초 동안 조회한다.
+
+```text
+요청 A: SET NX 성공 → DB 이체 → 완료 응답 캐시
+요청 B: SET NX 실패 → 완료 응답 대기 → 같은 응답 반환
+```
+
+대기 시간이 끝나거나 처리자가 중단되면 DB-only 경로로 폴백한다. 이때 원래 요청이 커밋된 상태라면 DB 유니크 제약 충돌 뒤 기존 결과를 반환하므로 중복 이체는 발생하지 않는다.
+
+### Redis 비활성화 또는 장애
+
+`redis-enabled=false`이거나 Redis 명령이 실패하면 DB-only 경로를 사용한다.
 
 ```text
 요청 A: 키 INSERT 성공 → 이체 처리 → 커밋
@@ -184,13 +196,7 @@ Redis에 키가 없거나 `redis-enabled=false`이면 DB-only 경로를 사용�
 
 유니크 충돌이 발생한 트랜잭션은 실패 상태이므로 그 안에서 기존 결과를 조회하지 않는다. 트랜잭션 바깥의 [IdempotentTransferService](../src/main/java/com/FinFlow/service/IdempotentTransferService.java)가 `DataIntegrityViolationException`을 처리한 뒤 새로운 조회로 최초 결과를 반환한다.
 
-동시에 들어온 최초 요청들은 모두 Redis 캐시 미스일 수 있다. 이 경우에도 MySQL 유니크 제약이 하나의 요청만 실제 이체로 진입시킨다.
-
-### Redis 장애 또는 오래된 캐시
-
-[RedisIdempotencyCache](../src/main/java/com/FinFlow/service/RedisIdempotencyCache.java)는 Redis 조회·저장 중 `DataAccessException`이 발생하면 로그를 남기고 DB 경로로 폴백한다.
-
-Redis에는 값이 있지만 MySQL에서 완료 거래를 찾지 못하면 DB가 초기화되었거나 캐시가 오래된 상태로 판단한다. 캐시를 제거한 뒤 MySQL을 기준으로 다시 처리한다.
+[RedisIdempotencyCache](../src/main/java/com/FinFlow/service/RedisIdempotencyCache.java)는 Redis 조회·잠금·저장 중 `DataAccessException`이 발생하면 로그를 남기고 이 경로로 폴백한다.
 
 ## 9. 계층별 정합성 책임
 
@@ -198,7 +204,8 @@ Redis에는 값이 있지만 MySQL에서 완료 거래를 찾지 못하면 DB가
 | --- | --- |
 | `Idempotency-Key` | 클라이언트 재시도를 하나의 논리 요청으로 식별 |
 | 요청 해시 | 동일 키의 다른 사용자·금액·계좌 요청 거부 |
-| Redis | 완료된 중복 요청의 DB 충돌 경로 가속 |
+| Redis `SET NX` | 같은 키의 동시 처리 요청을 진행 단계에서 1차 차단 |
+| Redis 완료 응답 | 완료된 재시도에 최초 응답을 DB 조회 없이 반환 |
 | DB 유니크 제약 | 캐시 상태와 무관하게 동시 중복 요청 최종 차단 |
 | DB 트랜잭션 | 멱등성 기록, 두 잔액, 거래내역의 원자성 보장 |
 | 계좌 비관적 락 | 서로 다른 키를 가진 동시 잔액 변경 직렬화 |
@@ -208,6 +215,13 @@ Redis는 정확성의 필수 구성 요소가 아니다. Redis를 끄거나 데�
 ## 10. Redis 구성
 
 Docker Compose는 MySQL 8.4와 Redis 7.4를 제공한다.
+
+로컬 Redis와 충돌하지 않도록 호스트에서는 `6380`을 사용하고, 컨테이너 내부 Redis는 기본 포트 `6379`를 사용한다. Spring Boot의 공통 기본값도 `localhost:6380`이므로 별도 환경변수가 없으면 Docker Redis에 연결된다.
+
+```text
+Spring Boot → localhost:6380 → Docker Redis:6379
+로컬 Redis  → localhost:6379  (사용하지 않음)
+```
 
 ```bash
 docker compose up -d mysql redis
@@ -220,18 +234,25 @@ spring:
   data:
     redis:
       host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      port: ${REDIS_PORT:6380}
 
 finflow:
   idempotency:
     redis-enabled: true
     redis-ttl: 24h
+    processing-ttl: 30s
+    wait-timeout: 2s
+    poll-interval: 25ms
 ```
 
 ```text
-Redis key:   finflow:idempotency:transfer:{Idempotency-Key의 SHA-256}
-Redis value: 요청 내용의 SHA-256
-TTL:         24시간
+처리 key:   finflow:idempotency:transfer:{키 해시}:processing
+처리 value: 요청 해시 + 소유자 UUID
+처리 TTL:   30초
+
+완료 key:   finflow:idempotency:transfer:{키 해시}:completed
+완료 value: 요청 해시 + 직렬화된 이체 응답
+완료 TTL:   24시간
 ```
 
 `FINFLOW_IDEMPOTENCY_REDIS_ENABLED=false` 또는 `true`로 Redis 사용 여부를 전환할 수 있다.
@@ -246,11 +267,19 @@ TTL:         24시간
 | 동일 요청 재시도 응답 | 최초 요청과 동일한 거래 ID |
 | 같은 키로 다른 금액 요청 | `CustomApiException`, 최초 거래만 유지 |
 
+[RedisIdempotencyConcurrencyIntegrationTest](../src/test/java/com/FinFlow/service/RedisIdempotencyConcurrencyIntegrationTest.java)는 Redis가 포함된 다음 시나리오를 검증한다.
+
+| 시나리오 | 기대 결과 |
+| --- | --- |
+| 같은 키의 동시 요청 8건 | 8건 성공, 동일 거래 ID, 실제 거래 1건 |
+| DB 거래·멱등성 레코드 제거 후 재시도 | Redis 완료 응답 반환, DB 접근으로 새 거래를 만들지 않음 |
+
 ```bash
 docker compose up -d mysql redis
 
 ./gradlew integrationTest \
-  --tests "com.FinFlow.service.IdempotentTransferServiceIntegrationTest"
+  --tests "com.FinFlow.service.IdempotentTransferServiceIntegrationTest" \
+  --tests "com.FinFlow.service.RedisIdempotencyConcurrencyIntegrationTest"
 ```
 
 일반 `test` 태스크는 `*IntegrationTest`를 제외한다. IntelliJ에서도 기본 `:test`가 아니라 다음 Gradle 실행 구성을 사용한다.
@@ -266,16 +295,16 @@ integrationTest --tests "com.FinFlow.service.IdempotentTransferServiceIntegratio
 | 경로 | 수행 작업 |
 | --- | --- |
 | DB-only | INSERT → 유니크 충돌 → 롤백 → 완료 거래 조회 |
-| Redis 우선 | Redis 요청 해시 조회 → 완료 거래 조회 |
+| Redis 우선 | Redis 완료 응답 조회 및 역직렬화 |
 
-2026-08-16 로컬 Docker 환경의 단일 실행 결과는 다음과 같다.
+2026-08-21 로컬 Docker 환경의 단일 실행 결과는 다음과 같다.
 
 | 경로 | 평균 | p50 | p95 |
 | --- | ---: | ---: | ---: |
-| DB-only | 11.920 ms | 7.120 ms | 29.109 ms |
-| Redis 우선 | 4.059 ms | 2.922 ms | 9.989 ms |
+| DB-only | 5.036 ms | 5.151 ms | 6.227 ms |
+| Redis 우선 | 0.506 ms | 0.499 ms | 0.699 ms |
 
-이 실행에서는 평균 응답시간이 약 65.95% 감소했다. 장비, JVM 워밍업, Docker 상태, 로그 출력에 따라 달라지는 참고값이며 운영 성능을 보장하지 않는다. 속도 차이는 테스트 성공 조건으로 사용하지 않고 측정 뒤 거래와 멱등성 레코드 수로 정확성을 검증한다.
+이 실행에서는 평균 응답시간이 약 89.94% 감소했다. 장비, JVM 워밍업, Docker 상태, 로그 출력에 따라 달라지는 참고값이며 운영 성능을 보장하지 않는다. 속도 차이는 테스트 성공 조건으로 사용하지 않고 측정 뒤 거래와 멱등성 레코드 수로 정확성을 검증한다.
 
 ```bash
 ./gradlew integrationTest \
@@ -326,14 +355,15 @@ loadtest/k6/results/redis-summary.json
 
 ## 14. 현재 구조의 한계
 
-- Redis에는 완료 응답을 캐시하지 않으므로 캐시 적중 시에도 MySQL 읽기가 발생한다.
-- 최초 요청 처리 중에는 Redis에 완료 값이 없어 동시 요청이 DB 유니크 충돌 경로에 진입할 수 있다.
+- 진행 중 요청은 최대 2초 동안 현재 서블릿 스레드를 점유하며 폴링한다.
+- 처리 시간이 `processing-ttl`을 넘으면 다른 요청이 새 처리 잠금을 획득할 수 있지만 DB 유니크 제약이 중복 이체를 최종 차단한다.
+- 완료 응답 DTO 구조가 바뀌면 이전 Redis JSON과의 역직렬화 호환성을 고려해야 한다.
 - 현재 응답만으로 최초 실행과 재시도 응답을 구분할 수 없다.
 - 멱등성 레코드와 Redis 캐시의 정리 정책은 아직 자동화되어 있지 않다.
 - 요청 해시는 문자열 연결 방식이므로 요청 필드 변경 시 해시 대상도 함께 관리해야 한다.
 - 로컬 통합 테스트와 k6 결과는 운영 환경의 처리량과 지연시간을 보장하지 않는다.
 
-Redis에 전체 응답을 저장하면 MySQL 조회도 생략할 수 있지만 응답 스키마 버전 관리와 민감정보 저장 범위를 함께 설계해야 한다. 현재 구현은 MySQL을 원본으로 유지하는 안전성을 우선한다.
+완료 응답 캐시는 DB 조회를 생략하는 대신 응답 스키마 버전 관리와 민감정보 저장 범위를 함께 관리해야 한다. Redis 장애와 TTL 만료 시에는 여전히 MySQL 레코드가 원본 역할을 한다.
 
 ## 15. 운영 고려사항
 
