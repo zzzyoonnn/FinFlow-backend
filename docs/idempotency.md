@@ -318,6 +318,15 @@ integrationTest --tests "com.FinFlow.service.IdempotentTransferServiceIntegratio
 
 기본 설정은 20 VU, 30초이며 평균, p50, p95, p99, 최대 응답시간, 처리량, 실패율을 출력한다. SQL 콘솔 출력은 결과를 크게 왜곡하므로 비활성화한다.
 
+저장된 실제 k6 결과는 다음과 같다. 이 값은 위의 서비스 계층 통합 테스트 결과가 아니라 JWT 인증과 HTTP 처리까지 포함한 전체 API 경로의 측정값이다.
+
+| 경로 | VU | 평균 | p95 | 처리량 |
+| --- | ---: | ---: | ---: | ---: |
+| DB-only | 20 | 26.012 ms | 44.067 ms | 약 745.7 req/s |
+| Redis cache hit | 20 | 5.865 ms | 11.826 ms | 약 3,175.7 req/s |
+
+동일한 20 VU, 30초 조건에서 Redis 캐시 경로의 평균 응답시간은 약 77.45%, p95는 약 73.16% 감소했고 처리량은 약 4.26배 증가했다. 로컬 Docker 단일 실행 결과이므로 운영 환경의 성능을 보장하는 값이 아니라 두 경로의 상대적인 차이를 확인하는 참고값이다.
+
 ```bash
 SPRING_PROFILES_ACTIVE=dev,mysql \
 SPRING_JPA_SHOW_SQL=false \
