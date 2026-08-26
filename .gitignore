@@ -26,6 +26,10 @@ out/
 !**/src/main/**/out/
 !**/src/test/**/out/
 
+### Load-test output ###
+loadtest/k6/results/*
+!loadtest/k6/results/.gitkeep
+
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/
