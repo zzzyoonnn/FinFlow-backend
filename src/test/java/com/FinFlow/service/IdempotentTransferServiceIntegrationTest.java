@@ -11,6 +11,7 @@ import com.FinFlow.dto.account.AccountRespDTO.AccountTransferRespDTO;
 import com.FinFlow.handler.ex.CustomApiException;
 import com.FinFlow.repository.AccountRepository;
 import com.FinFlow.repository.IdempotencyRecordRepository;
+import com.FinFlow.repository.OutboxEventRepository;
 import com.FinFlow.repository.TransactionRepository;
 import com.FinFlow.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +29,8 @@ class IdempotentTransferServiceIntegrationTest extends DummyObject {
   @Autowired
   private IdempotencyRecordRepository idempotencyRecordRepository;
   @Autowired
+  private OutboxEventRepository outboxEventRepository;
+  @Autowired
   private TransactionRepository transactionRepository;
   @Autowired
   private AccountRepository accountRepository;
@@ -38,6 +41,7 @@ class IdempotentTransferServiceIntegrationTest extends DummyObject {
 
   @BeforeEach
   void setUp() {
+    outboxEventRepository.deleteAll();
     idempotencyRecordRepository.deleteAll();
     transactionRepository.deleteAll();
     accountRepository.deleteAll();
@@ -64,6 +68,7 @@ class IdempotentTransferServiceIntegrationTest extends DummyObject {
     assertThat(deposit.getBalance()).isEqualTo(1500L);
     assertThat(transactionRepository.count()).isEqualTo(1L);
     assertThat(idempotencyRecordRepository.count()).isEqualTo(1L);
+    assertThat(outboxEventRepository.count()).isEqualTo(1L);
     assertThat(retry.getTransaction().getId()).isEqualTo(first.getTransaction().getId());
   }
 

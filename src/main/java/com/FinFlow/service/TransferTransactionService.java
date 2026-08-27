@@ -4,13 +4,16 @@ import com.FinFlow.domain.Account;
 import com.FinFlow.domain.IdempotencyRecord;
 import com.FinFlow.domain.Transaction;
 import com.FinFlow.domain.TransactionEnum;
+import com.FinFlow.event.TransactionCompletedEvent;
 import com.FinFlow.dto.account.AccountReqDTO.AccountTransferReqDTO;
 import com.FinFlow.dto.account.AccountRespDTO.AccountTransferRespDTO;
 import com.FinFlow.handler.ex.CustomApiException;
 import com.FinFlow.repository.AccountRepository;
 import com.FinFlow.repository.IdempotencyRecordRepository;
+import com.FinFlow.repository.OutboxEventRepository;
 import com.FinFlow.repository.TransactionRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +24,11 @@ public class TransferTransactionService {
   private final AccountRepository accountRepository;
   private final TransactionRepository transactionRepository;
   private final IdempotencyRecordRepository idempotencyRecordRepository;
+  private final OutboxEventRepository outboxEventRepository;
+  private final TransactionAuditService transactionAuditService;
+
+  @Value("${finflow.kafka.outbox-enabled:true}")
+  private boolean outboxEnabled;
 
   @Transactional
   public AccountTransferRespDTO execute(String idempotencyKey, String requestHash,
@@ -61,6 +69,10 @@ public class TransferTransactionService {
         .receiver(request.getDepositNumber())
         .build());
     record.complete(transaction);
+    transactionAuditService.recordSynchronously(transaction);
+    if (outboxEnabled) {
+      outboxEventRepository.save(TransactionCompletedEvent.toOutbox(transaction));
+    }
 
     return new AccountTransferRespDTO(withdrawAccount, transaction);
   }

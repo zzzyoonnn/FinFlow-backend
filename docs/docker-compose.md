@@ -4,7 +4,7 @@
 
 이 문서는 FinFlow의 Docker Compose 구성과 로컬 실행 방법을 정리한다. Docker가 기본 인프라 실행 환경이며, 로컬에 직접 설치한 MySQL이나 Redis 대신 Compose 서비스를 사용한다.
 
-현재 [compose.yaml](../compose.yaml)은 MySQL, Redis, k6를 제공한다. Kafka는 Transactional Outbox 구현 단계에서 추가할 예정이다.
+현재 [compose.yaml](../compose.yaml)은 MySQL, Redis, Kafka(KRaft), k6를 제공한다.
 
 ## 2. 구성 요소와 포트
 
@@ -12,6 +12,7 @@
 | --- | --- | ---: | ---: | --- |
 | MySQL 8.4 | `finflow-mysql` | 3307 | 3306 | 거래와 멱등성 기록의 최종 저장소 |
 | Redis 7.4 | `finflow-redis` | 6380 | 6379 | 진행 중 요청 차단과 완료 응답 캐시 |
+| Kafka 3.9 | `finflow-kafka` | 9092 | 9092 | 이체 완료 이벤트 발행·소비 |
 | k6 0.57 | 실행 시 생성 | 없음 | 없음 | HTTP 멱등성 부하 테스트 |
 
 호스트 포트는 로컬에 설치된 MySQL의 `3306`, Redis의 `6379`와 충돌하지 않도록 각각 `3307`, `6380`을 사용한다.
@@ -32,10 +33,10 @@ cd FinFlow
 docker compose config
 ```
 
-MySQL과 Redis를 시작한다.
+MySQL, Redis, Kafka를 시작한다.
 
 ```bash
-docker compose up -d mysql redis
+docker compose up -d mysql redis kafka
 docker compose ps
 ```
 
@@ -62,6 +63,8 @@ SPRING_JPA_SHOW_SQL=false \
 | `MYSQL_PASSWORD` | `finflow` |
 | `REDIS_HOST` | `localhost` |
 | `REDIS_PORT` | `6380` |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` |
+| `KAFKA_ENABLED` | `false` |
 
 `SPRING_JPA_SHOW_SQL=false`는 통합·부하 테스트 중 SQL 콘솔 출력 비용이 결과에 섞이는 것을 줄인다.
 
@@ -76,6 +79,7 @@ Environment variables에는 필요에 따라 다음 값을 추가한다.
 ```text
 SPRING_JPA_SHOW_SQL=false
 FINFLOW_IDEMPOTENCY_REDIS_ENABLED=true
+KAFKA_ENABLED=true
 ```
 
 ## 5. 연결 확인

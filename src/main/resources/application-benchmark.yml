@@ -1,0 +1,18 @@
+server:
+  port: 8081
+
+spring:
+  jpa:
+    show-sql: false
+
+finflow:
+  idempotency:
+    redis-enabled: false
+  audit:
+    mode: ${AUDIT_MODE:sync}
+  kafka:
+    outbox-enabled: ${OUTBOX_ENABLED:false}
+
+logging:
+  level:
+    com.FinFlow: WARN
