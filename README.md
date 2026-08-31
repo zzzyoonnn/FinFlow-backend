@@ -9,7 +9,7 @@ Spring Boot 기반 금융 거래 API입니다. 계좌 생성, 입금, 출금, �
 - [기술 스택](#기술-스택)
 - [아키텍처와 거래 처리](#아키텍처와-거래-처리)
 - [구현 현황](#구현-현황)
-- [향후 로드맵](#향후-로드맵)
+- [이벤트 처리](#이벤트-처리)
 - [테스트 전략](#테스트-전략)
 - [실행 방법](#실행-방법)
 - [현재 구조의 한계](#현재-구조의-한계)
@@ -25,7 +25,7 @@ FinFlow는 기본적인 은행 업무를 구현한 개인 포트폴리오 프로
 - 동일 계좌의 동시 변경은 비관적 락으로 순차 처리합니다.
 - 중복 이체는 `Idempotency-Key`로 식별하고 DB 유니크 제약으로 최종 차단합니다.
 - Redis는 진행 중 요청 차단과 완료 응답 캐시를 담당하는 보조 계층입니다.
-- 거래 완료 후 부가 작업은 Kafka와 Transactional Outbox로 분리할 예정입니다.
+- 이체 완료 이벤트는 Transactional Outbox를 거쳐 Kafka로 발행합니다.
 
 ## 주요 기능
 
@@ -39,6 +39,7 @@ FinFlow는 기본적인 은행 업무를 구현한 개인 포트폴리오 프로
 - 전역 예외 처리 및 공통 응답 형식
 - 멱등성 키 기반 중복 이체 방지
 - Redis 기반 진행 중 요청 차단 및 완료 응답 캐시
+- Transactional Outbox 기반 Kafka 이벤트 발행과 멱등 소비
 
 ## 기술 스택
 
@@ -52,7 +53,7 @@ FinFlow는 기본적인 은행 업무를 구현한 개인 포트폴리오 프로
 | Cache | Redis 7.4, Spring Data Redis |
 | Test | JUnit 5, Mockito, Spring Boot Test, k6 |
 | Infrastructure | Docker Compose |
-| Messaging 예정 | Apache Kafka, Transactional Outbox |
+| Messaging | Apache Kafka, Spring Kafka, Transactional Outbox |
 
 ## 아키텍처와 거래 처리
 
@@ -62,7 +63,7 @@ FinFlow는 기본적인 은행 업무를 구현한 개인 포트폴리오 프로
 
 ![FinFlow 아이콘 기반 시스템 아키텍처](docs/architecture/finflow-icon-architecture.png)
 
-아이콘 중심 다이어그램은 현재 구현된 요청·저장 흐름과 향후 Kafka 이벤트 처리 영역을 함께 보여줍니다. 실선은 현재 구현, 보라색 점선은 향후 구현 예정 영역입니다.
+아이콘 중심 다이어그램은 요청·저장 흐름과 Kafka 이벤트 처리 영역을 함께 보여줍니다.
 
 ### 계층 및 데이터 흐름
 
@@ -108,9 +109,9 @@ Redis가 비활성화되거나 장애가 발생하면 DB 경로로 폴백합니�
 | DB 멱등성 | 완료 | `Idempotency-Key`, 요청 해시, 멱등성 기록과 유니크 제약 |
 | Redis 멱등성 | 완료 | `SET NX` 처리 선점, 완료 응답 캐시, TTL과 DB 폴백 |
 | 부하 테스트 | 완료 | DB 재시도·Redis 캐시 적중 비교, SET NX 최초 경합 시나리오 |
-| Kafka 이벤트 처리 | 예정 | Transactional Outbox 기반 거래 완료 이벤트 발행·소비 |
+| Kafka 이벤트 처리 | 완료 | Transactional Outbox 기반 이체 완료 이벤트 발행·멱등 소비 |
 
-## 향후 로드맵
+## 이벤트 처리
 
 ### Kafka와 Transactional Outbox 기반 거래 이벤트 처리
 
@@ -119,8 +120,9 @@ Redis가 비활성화되거나 장애가 발생하면 DB 경로로 폴백합니�
 - 알림, 감사 로그, 통계, 이상 거래 탐지 같은 후속 작업을 API 요청에서 분리합니다.
 - `eventId`를 기준으로 Consumer의 중복 처리를 방지합니다.
 - 계좌 또는 거래 단위의 이벤트 순서를 고려해 파티션 키를 설계합니다.
-- 발행 실패 재시도, 지수 백오프, DLQ와 Consumer lag 모니터링을 추가합니다.
-- 이벤트 스키마 버전과 오래된 Outbox 레코드 정리 정책을 정의합니다.
+- 발행 실패 시 최대 5분의 지수 백오프로 재시도합니다.
+- payload에 스키마 버전을 포함하고, 거래 ID를 Kafka 파티션 키로 사용합니다.
+- 운영 단계에서는 DLQ, Consumer lag 모니터링, 오래된 Outbox 레코드 정리 정책을 추가합니다.
 
 Kafka는 후속 작업을 비동기화하고 독립적으로 확장하기 위한 수단입니다. 계좌 락과 MySQL 쓰기가 포함된 핵심 이체 처리량 자체를 자동으로 확장하지는 않으므로, 구현 후 일반 이체와 동일 계좌 집중 트래픽을 분리해 부하 테스트할 예정입니다.
 
@@ -134,7 +136,7 @@ AWS 배포는 로컬 Docker 환경에서 Kafka와 Outbox의 정확성·성능 �
 | DB 통합 테스트 | 커밋·롤백, 락, 멱등성 유니크 제약 | Docker Compose MySQL |
 | Redis 통합 테스트 | SET NX 선점, 완료 응답 캐시, 동시 요청 | Docker Compose Redis·MySQL |
 | 부하 테스트 | DB 재시도와 Redis 캐시 비교, SET NX 경합 | Docker Compose, k6 |
-| Kafka 통합 테스트 예정 | 커밋 이후 이벤트 발행, 중복 소비 방지 | Docker Compose Kafka·MySQL |
+| Kafka 테스트 | 발행 성공·실패 재시도, 중복 소비 방지 | 단위 테스트, Docker Compose Kafka·MySQL |
 
 H2는 빠른 단위·기본 테스트에 사용합니다. 트랜잭션 격리, 비관적 락, 유니크 제약과 Redis 동시성처럼 실제 인프라 동작이 중요한 기능은 Docker MySQL과 Redis에서 검증합니다.
 
@@ -161,7 +163,7 @@ SPRING_JPA_SHOW_SQL=false \
 ```bash
 ./gradlew test
 
-docker compose up -d mysql redis
+docker compose up -d mysql redis kafka
 ./gradlew integrationTest
 ```
 
@@ -174,7 +176,7 @@ docker compose up -d mysql redis
 - Redis 완료 응답 DTO가 변경되면 기존 캐시 JSON과의 호환성을 고려해야 합니다.
 - Redis와 DB 멱등성 레코드의 운영 정리 작업은 아직 구현되지 않았습니다.
 - 애플리케이션과 MySQL은 현재 단일 쓰기 구조이며 처리 한계는 배포 환경의 부하 테스트로 검증해야 합니다.
-- Kafka와 Transactional Outbox는 아직 구현되지 않았습니다.
+- Consumer의 실제 후속 작업은 현재 처리 ID 저장과 로그 기록까지이며, 알림·감사·통계 저장소는 아직 분리되지 않았습니다.
 
 ## 상세 문서
 
@@ -182,5 +184,6 @@ docker compose up -d mysql redis
 - [계좌 잔액 동시성 제어](docs/concurrency-lock.md)
 - [이체 요청 멱등성](docs/idempotency.md)
 - [k6 이체 멱등성 부하 테스트](docs/k6-load-test.md)
+- [Kafka·Outbox 비교 및 장애 테스트](docs/kafka-benchmark.md)
 - [Docker Compose 실행 가이드](docs/docker-compose.md)
 - [테이블 구조](docs/table.md)
