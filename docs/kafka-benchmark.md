@@ -32,7 +32,13 @@
 20개 계좌 쌍은 하나의 계좌 락만 측정하는 실험이 되지 않도록 요청을 분산한다.
 동일 계좌 집중 성능은 별도 시나리오로 측정해야 한다.
 
-## 3. 인프라 시작
+## 3. 동기 감사 로그 기준 테스트 실행
+
+이 절은 Kafka 적용 전 비교 기준인 `sync` 모드를 처음부터 실행하는 전체 순서다.
+`benchmark` 사용자를 MySQL에 직접 `INSERT`하지 않는다. 비밀번호가 BCrypt로 저장되어야
+하므로 애플리케이션의 `BenchmarkDataInit`이 사용자와 계좌를 생성하게 한다.
+
+### 3.1 Docker 인프라 시작
 
 모든 비교에서 컨테이너 실행 조건을 같게 유지한다.
 
@@ -41,7 +47,13 @@ docker compose up -d mysql redis kafka
 docker compose ps
 ```
 
-### 동기 감사 로그 모드
+MySQL, Redis, Kafka가 모두 `healthy`인지 확인한다. 동기 모드에서는 Kafka를 사용하지
+않지만 적용 후 테스트와 컨테이너 실행 조건을 같게 유지하기 위해 함께 실행한다.
+
+### 3.2 애플리케이션 시작
+
+이미 실행 중인 애플리케이션이 있다면 해당 터미널에서 `Ctrl+C`로 종료한다. 그다음
+프로젝트 루트의 첫 번째 터미널에서 다음 명령을 실행한다.
 
 ```bash
 SPRING_PROFILES_ACTIVE=mysql,benchmark \
@@ -51,7 +63,87 @@ KAFKA_ENABLED=false \
 ./gradlew bootRun
 ```
 
-### Transactional Outbox 모드
+각 설정의 의미는 다음과 같다.
+
+| 설정 | 값 | 의미 |
+| --- | --- | --- |
+| `SPRING_PROFILES_ACTIVE` | `mysql,benchmark` | Docker MySQL과 고정 벤치마크 데이터 사용 |
+| `AUDIT_MODE` | `sync` | 이체 트랜잭션 안에서 감사 로그 저장 |
+| `OUTBOX_ENABLED` | `false` | Outbox 레코드 생성 안 함 |
+| `KAFKA_ENABLED` | `false` | Kafka Publisher와 Consumer 비활성화 |
+
+로그에 `Tomcat started on port 8081`이 출력될 때까지 기다린다. 애플리케이션 시작 시
+`create-drop`으로 스키마를 다시 만들고 `BenchmarkDataInit`이 MySQL에 다음 데이터를
+생성한다.
+
+- `benchmark` 사용자, 비밀번호 `1234`
+- 출금 계좌 20개
+- 입금 계좌 20개
+
+`dev` 프로필로 실행하면 `test`, `test2`만 생성되어 k6 로그인이 `401`로 실패한다.
+
+### 3.3 MySQL 사용자와 계좌 확인
+
+애플리케이션은 계속 실행한 상태로 두고 두 번째 터미널에서 확인한다.
+
+```bash
+docker compose exec mysql \
+  mysql -ufinflow -pfinflow finflow \
+  -e "SELECT username FROM users; SELECT COUNT(*) AS account_count FROM account;"
+```
+
+정상이라면 다음 값이 확인된다.
+
+```text
+username: benchmark
+account_count: 40
+```
+
+`benchmark`가 없고 `test`, `test2`만 보인다면 애플리케이션을 종료하고 3.2의 명령으로
+다시 실행한다. 테이블이나 사용자를 수동으로 생성할 필요는 없다.
+
+### 3.4 동기 감사 부하 실행
+
+두 번째 터미널에서 100 TPS를 2분 동안 한 번 실행한다.
+
+```bash
+BENCHMARK_TARGET_RPS=100 \
+K6_DURATION=2m \
+./loadtest/benchmark/run-load.sh normal sync 1
+```
+
+마지막 `1`은 반복 횟수다. 터미널 결과에 다음 모드가 표시되어야 한다.
+
+```text
+Transaction benchmark (sync/normal)
+```
+
+`failure rate`가 0%인지 확인한 뒤 DB 정합성 결과를 저장한다.
+
+```bash
+./loadtest/benchmark/collect-metrics.sh \
+  loadtest/k6/results/sync-normal-database-metrics.csv
+```
+
+동기 모드의 정상 완료 조건은 다음과 같다.
+
+```text
+transactions = audits
+audit_completion_rate_pct = 100
+data_loss_rate_pct = 0
+missing_audits = 0
+duplicate_audits = 0
+outbox_pending = 0
+outbox_published = 0
+processed_events = 0
+```
+
+`outbox_event` 테이블은 JPA 스키마 생성 과정에서 존재할 수 있지만
+`OUTBOX_ENABLED=false`이므로 데이터는 저장되지 않는다.
+
+### 3.5 Kafka Outbox 모드로 전환
+
+동기 테스트 애플리케이션을 `Ctrl+C`로 종료한 후 다음 명령으로 다시 실행한다.
 
 ```bash
 SPRING_PROFILES_ACTIVE=mysql,benchmark \
@@ -61,8 +153,25 @@ KAFKA_ENABLED=true \
 ./gradlew bootRun
 ```
 
-애플리케이션 시작 시 `create-drop`으로 스키마와 기준 데이터를 다시 만든다. 각 반복
-측정 전에 애플리케이션을 재시작해야 이전 거래가 다음 결과에 섞이지 않는다.
+Kafka 적용 후에도 같은 100 TPS·2분 조건을 사용하되 실행 모드만 `outbox`로 바꾼다.
+
+```bash
+BENCHMARK_TARGET_RPS=100 \
+K6_DURATION=2m \
+./loadtest/benchmark/run-load.sh normal outbox 1
+```
+
+비동기 처리가 끝난 다음 정합성 지표를 수집한다.
+
+```bash
+./loadtest/benchmark/wait-for-consistency.sh 120
+
+./loadtest/benchmark/collect-metrics.sh \
+  loadtest/k6/results/outbox-normal-database-metrics.csv
+```
+
+각 모드에서 애플리케이션을 재시작하면 `create-drop`으로 스키마와 기준 데이터가 다시
+생성되므로 이전 실행의 거래가 다음 결과에 섞이지 않는다.
 
 ## 4. 부하 시나리오
 
@@ -128,57 +237,17 @@ BENCHMARK_SPIKE_RPS=500 \
 데이터 유실률 = 감사 로그가 없는 거래 수 / 커밋된 거래 수 × 100
 ```
 
-## 6. 감사 저장소 장애
-
-이 시나리오는 감사 로그 테이블의 이름을 일시적으로 변경해 감사 저장 실패를
-주입한다. 스크립트 종료 또는 인터럽트 시 원래 이름으로 복구한다.
-
-```bash
-BENCHMARK_TARGET_RPS=100 \
-BENCHMARK_DURATION=30s \
-./loadtest/benchmark/run-audit-outage.sh sync
-```
-
-동기 모드에서는 감사 로그 실패가 이체 트랜잭션까지 롤백시키므로 요청 실패율이
-증가할 것으로 예상한다. Outbox 모드에서는 API 거래 완료 여부와 Consumer 재시도 후
-최종 누락 건수를 측정한다. 현재 Consumer 재시도·DLQ 정책의 부족도 이 실험 결과로
-확인할 수 있다.
-
-## 7. Kafka 장애와 복구 시간
-
-Outbox 모드 애플리케이션이 실행 중일 때 사용한다.
-
-```bash
-BENCHMARK_TARGET_RPS=100 \
-BENCHMARK_DURATION=30s \
-RECOVERY_TIMEOUT_SECONDS=300 \
-./loadtest/benchmark/run-kafka-outage.sh
-```
-
-스크립트는 다음 순서로 동작한다.
-
-1. Kafka 중단
-2. Kafka가 없는 상태에서 이체 부하 실행
-3. Kafka 재시작
-4. `거래 수 = 감사 로그 수`, `PENDING Outbox = 0`이 될 때까지 측정
-5. 복구 타임라인과 최종 DB 지표를 CSV로 저장
-
-복구 시간은 Kafka 재시작 명령 이후 모든 backlog가 처리되기까지 걸린 시간이다.
-재처리 성공률은 최종 감사 로그 완료율로 평가하며, 중복 업무 반영은
-`duplicate_audits`로 확인한다.
-
-## 8. 결과 파일
+## 6. 결과 파일
 
 ```text
 loadtest/k6/results/<run-id>-summary.json
-loadtest/k6/results/<mode>-<fault>-database-metrics.csv
-loadtest/k6/results/outbox-kafka-outage-recovery.csv
+loadtest/k6/results/<mode>-normal-database-metrics.csv
 ```
 
 결과 디렉터리는 Git에서 제외한다. 공식 결과를 문서에 포함할 때는 원본 파일을 별도
 보관하고 반복 실행의 중앙값, 머신 사양, JVM 옵션과 실행 시각을 함께 기록한다.
 
-## 9. 공정한 비교 체크리스트
+## 7. 공정한 비교 체크리스트
 
 - 동일 Git 테스트 하네스 사용
 - 동일 Docker 이미지와 CPU·메모리 제한
@@ -193,3 +262,15 @@ loadtest/k6/results/outbox-kafka-outage-recovery.csv
 현재 작업 디렉터리의 Kafka 변경을 되돌리지 않고도 `OUTBOX_ENABLED=false`와
 `KAFKA_ENABLED=false`로 동기 기준을 측정할 수 있다. 다만 최종 보고서에서는 Kafka
 코드가 전혀 없는 기준 커밋에서도 같은 하네스를 실행해 결과가 일치하는지 확인한다.
+
+## 8. 다음 구현 단계에서 검증할 항목
+
+현재 단계에서는 정상 상황의 성능과 E2E 정합성만 검증한다. 다음 단계에서 Publisher와
+Consumer의 장애 처리 정책을 구현한 뒤 다음 항목을 추가한다.
+
+- Kafka 중단 중 Outbox 이벤트 보존
+- Kafka 복구 후 backlog 처리 시간
+- Publisher 발행 실패 재시도와 최종 실패 격리
+- 감사 로그 저장 실패 시 Consumer 재시도
+- DLQ 이동과 재처리 성공률
+- 중복 이벤트 전달 시 업무 중복 반영 방지
