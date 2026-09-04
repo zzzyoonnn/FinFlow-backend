@@ -3,6 +3,7 @@ package com.FinFlow.event;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.FinFlow.domain.ProcessedEvent;
 import com.FinFlow.repository.ProcessedEventRepository;
@@ -50,6 +51,32 @@ class TransactionEventConsumerTests {
         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+  }
+
+  @Test
+  void rejectsMalformedJsonWithoutWritingDatabase() {
+    ProcessedEventRepository repository = org.mockito.Mockito.mock(ProcessedEventRepository.class);
+    TransactionAuditService auditService = org.mockito.Mockito.mock(TransactionAuditService.class);
+    TransactionEventConsumer consumer = new TransactionEventConsumer(repository, objectMapper, auditService);
+
+    assertThatThrownBy(() -> consumer.consume("not-json"))
+        .isInstanceOf(InvalidEventPayloadException.class);
+    verify(auditService, never()).recordFromEvent(org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+  }
+
+  @Test
+  void rejectsUnsupportedSchemaVersion() throws Exception {
+    ProcessedEventRepository repository = org.mockito.Mockito.mock(ProcessedEventRepository.class);
+    TransactionAuditService auditService = org.mockito.Mockito.mock(TransactionAuditService.class);
+    TransactionEventConsumer consumer = new TransactionEventConsumer(repository, objectMapper, auditService);
+    String payload = objectMapper.writeValueAsString(new TransactionCompletedEvent(
+        2, "event-1", 1L, "TRANSFER", "111", "222", 100L, LocalDateTime.now()));
+
+    assertThatThrownBy(() -> consumer.consume(payload))
+        .isInstanceOf(UnsupportedEventSchemaException.class);
   }
 
   private String payload(String eventId) throws Exception {

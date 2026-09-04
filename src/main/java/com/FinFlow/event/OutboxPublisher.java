@@ -25,21 +25,22 @@ public class OutboxPublisher {
 
   @Value("${finflow.kafka.transaction-topic:finflow.transaction.completed.v1}")
   private String topic;
+  @Value("${finflow.kafka.outbox-max-attempts:5}")
+  private int maxAttempts;
 
   @Scheduled(fixedDelayString = "${finflow.kafka.outbox-poll-interval:1000}")
   @Transactional
   public void publishPending() {
-    List<OutboxEvent> events = outboxEventRepository
-        .findTop100ByStatusAndNextAttemptAtLessThanEqualOrderByCreatedAt(
-            OutboxStatus.PENDING, LocalDateTime.now());
+    List<OutboxEvent> events = outboxEventRepository.lockPublishableBatch(
+        OutboxStatus.PENDING.name(), LocalDateTime.now());
     for (OutboxEvent event : events) {
       try {
         kafkaTemplate.send(topic, event.getAggregateId(), event.getPayload()).get(10, TimeUnit.SECONDS);
         event.published();
       } catch (Exception exception) {
-        event.retryLater();
-        log.warn("Outbox publish failed. eventId={}, retryCount={}",
-            event.getEventId(), event.getRetryCount(), exception);
+        event.publishFailed(exception, maxAttempts);
+        log.warn("Outbox publish failed. eventId={}, retryCount={}, status={}",
+            event.getEventId(), event.getRetryCount(), event.getStatus(), exception);
       }
     }
   }

@@ -23,13 +23,14 @@ class OutboxPublisherTests {
     @SuppressWarnings("unchecked")
     KafkaTemplate<String, String> kafkaTemplate = mock(KafkaTemplate.class);
     OutboxEvent event = new OutboxEvent("TransactionCompleted", "1", "{}");
-    when(repository.findTop100ByStatusAndNextAttemptAtLessThanEqualOrderByCreatedAt(
-        org.mockito.ArgumentMatchers.eq(OutboxStatus.PENDING), org.mockito.ArgumentMatchers.any()))
+    when(repository.lockPublishableBatch(
+        org.mockito.ArgumentMatchers.eq(OutboxStatus.PENDING.name()), org.mockito.ArgumentMatchers.any()))
         .thenReturn(List.of(event));
     when(kafkaTemplate.send(anyString(), anyString(), anyString()))
         .thenReturn(CompletableFuture.completedFuture(null));
     OutboxPublisher publisher = new OutboxPublisher(repository, kafkaTemplate);
     ReflectionTestUtils.setField(publisher, "topic", "transactions");
+    ReflectionTestUtils.setField(publisher, "maxAttempts", 5);
 
     publisher.publishPending();
 
@@ -43,17 +44,31 @@ class OutboxPublisherTests {
     @SuppressWarnings("unchecked")
     KafkaTemplate<String, String> kafkaTemplate = mock(KafkaTemplate.class);
     OutboxEvent event = new OutboxEvent("TransactionCompleted", "1", "{}");
-    when(repository.findTop100ByStatusAndNextAttemptAtLessThanEqualOrderByCreatedAt(
-        org.mockito.ArgumentMatchers.eq(OutboxStatus.PENDING), org.mockito.ArgumentMatchers.any()))
+    when(repository.lockPublishableBatch(
+        org.mockito.ArgumentMatchers.eq(OutboxStatus.PENDING.name()), org.mockito.ArgumentMatchers.any()))
         .thenReturn(List.of(event));
     when(kafkaTemplate.send(anyString(), anyString(), anyString()))
         .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("broker unavailable")));
     OutboxPublisher publisher = new OutboxPublisher(repository, kafkaTemplate);
     ReflectionTestUtils.setField(publisher, "topic", "transactions");
+    ReflectionTestUtils.setField(publisher, "maxAttempts", 5);
 
     publisher.publishPending();
 
     assertThat(event.getStatus()).isEqualTo(OutboxStatus.PENDING);
     assertThat(event.getRetryCount()).isEqualTo(1);
+  }
+
+  @Test
+  void isolatesEventAfterMaximumPublishAttempts() {
+    OutboxEvent event = new OutboxEvent("TransactionCompleted", "1", "{}");
+
+    event.publishFailed(new IllegalStateException("broker unavailable"), 2);
+    event.publishFailed(new IllegalStateException("broker unavailable"), 2);
+
+    assertThat(event.getStatus()).isEqualTo(OutboxStatus.FAILED);
+    assertThat(event.getRetryCount()).isEqualTo(2);
+    assertThat(event.getFailedAt()).isNotNull();
+    assertThat(event.getLastError()).isEqualTo("broker unavailable");
   }
 }

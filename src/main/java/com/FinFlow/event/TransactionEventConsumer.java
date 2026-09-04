@@ -22,8 +22,14 @@ public class TransactionEventConsumer {
 
   @KafkaListener(topics = "${finflow.kafka.transaction-topic:finflow.transaction.completed.v1}")
   @Transactional
-  public void consume(String payload) throws Exception {
-    TransactionCompletedEvent event = objectMapper.readValue(payload, TransactionCompletedEvent.class);
+  public void consume(String payload) {
+    TransactionCompletedEvent event;
+    try {
+      event = objectMapper.readValue(payload, TransactionCompletedEvent.class);
+    } catch (Exception exception) {
+      throw new InvalidEventPayloadException("Malformed transaction event JSON", exception);
+    }
+    validate(event);
     if (processedEventRepository.existsById(event.eventId())) {
       return;
     }
@@ -32,5 +38,17 @@ public class TransactionEventConsumer {
     processedEventRepository.saveAndFlush(new ProcessedEvent(event.eventId()));
     log.info("Transaction event processed. eventId={}, transactionId={}",
         event.eventId(), event.transactionId());
+  }
+
+  private void validate(TransactionCompletedEvent event) {
+    if (event.schemaVersion() != 1) {
+      throw new UnsupportedEventSchemaException(
+          "Unsupported TransactionCompleted schema version: " + event.schemaVersion());
+    }
+    if (event.eventId() == null || event.transactionId() == null || event.transactionType() == null
+        || event.sender() == null || event.receiver() == null || event.amount() == null
+        || event.occurredAt() == null) {
+      throw new InvalidEventPayloadException("Transaction event is missing required fields");
+    }
   }
 }

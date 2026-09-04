@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -14,7 +15,11 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor
 @Entity
-@Table(name = "outbox_event")
+@Table(name = "outbox_event", indexes = {
+    @Index(name = "idx_outbox_publishable", columnList = "status,nextAttemptAt,createdAt"),
+    @Index(name = "idx_outbox_published_cleanup", columnList = "status,publishedAt"),
+    @Index(name = "idx_outbox_failed_cleanup", columnList = "status,failedAt")
+})
 public class OutboxEvent {
   @Id
   @Column(length = 36)
@@ -35,6 +40,9 @@ public class OutboxEvent {
   @Column(nullable = false)
   private LocalDateTime nextAttemptAt;
   private LocalDateTime publishedAt;
+  private LocalDateTime failedAt;
+  @Column(length = 1000)
+  private String lastError;
 
   public OutboxEvent(String eventType, String aggregateId, String payload) {
     this(eventType, aggregateId, payload, UUID.randomUUID().toString());
@@ -55,9 +63,22 @@ public class OutboxEvent {
     publishedAt = LocalDateTime.now();
   }
 
-  public void retryLater() {
+  public void publishFailed(Throwable cause, int maxAttempts) {
     retryCount++;
+    lastError = abbreviate(cause == null ? null : cause.getMessage(), 1000);
+    if (retryCount >= maxAttempts) {
+      status = OutboxStatus.FAILED;
+      failedAt = LocalDateTime.now();
+      return;
+    }
     long delaySeconds = Math.min(300L, 1L << Math.min(retryCount, 8));
     nextAttemptAt = LocalDateTime.now().plusSeconds(delaySeconds);
+  }
+
+  private String abbreviate(String value, int maxLength) {
+    if (value == null || value.length() <= maxLength) {
+      return value;
+    }
+    return value.substring(0, maxLength);
   }
 }

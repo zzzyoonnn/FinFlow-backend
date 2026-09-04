@@ -5,6 +5,8 @@ spring:
       group-id: ${KAFKA_CONSUMER_GROUP:finflow-transaction-consumer}
       auto-offset-reset: earliest
       enable-auto-commit: false
+      properties:
+        isolation.level: read_committed
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
@@ -29,3 +31,13 @@ finflow:
     outbox-enabled: ${OUTBOX_ENABLED:true}
     transaction-topic: finflow.transaction.completed.v1
     outbox-poll-interval: 1000
+    outbox-max-attempts: ${OUTBOX_MAX_ATTEMPTS:5}
+    consumer:
+      retry-interval: ${KAFKA_CONSUMER_RETRY_INTERVAL:1000}
+      max-retries: ${KAFKA_CONSUMER_MAX_RETRIES:3}
+      dlq-suffix: ${KAFKA_DLQ_SUFFIX:.dlq}
+    cleanup:
+      cron: ${EVENT_CLEANUP_CRON:0 0 3 * * *}
+      outbox-retention: ${OUTBOX_RETENTION:7d}
+      failed-retention: ${FAILED_OUTBOX_RETENTION:30d}
+      processed-retention: ${PROCESSED_EVENT_RETENTION:30d}
