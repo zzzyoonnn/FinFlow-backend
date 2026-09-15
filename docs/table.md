@@ -43,6 +43,27 @@
 | `created_at`               | TIMESTAMP   | Transaction time                                     |
 | `updated_at`               | TIMESTAMP   | Updated time                                         |
 
+### 🧾 transaction_audit_log
+
+| Column             | Type        | Description                                  |
+| ------------------ | ----------- | -------------------------------------------- |
+| `id`               | BIGINT (PK) | Unique audit log ID                          |
+| `event_id`         | VARCHAR(64) | Source event ID (unique)                     |
+| `transaction_id`   | BIGINT      | Audited transaction ID (unique)              |
+| `transaction_type` | VARCHAR(20) | Transaction type                             |
+| `sender`           | VARCHAR(20) | Sender account number                        |
+| `receiver`         | VARCHAR(20) | Receiver account number                      |
+| `amount`           | BIGINT      | Transaction amount                           |
+| `occurred_at`      | TIMESTAMP   | Time the transaction occurred                |
+| `recorded_at`      | TIMESTAMP   | Time the Consumer stored the audit log       |
+
+### ✅ processed_event
+
+| Column         | Type        | Description                                      |
+| -------------- | ----------- | ------------------------------------------------ |
+| `event_id`     | VARCHAR(36) | Processed event ID and idempotency key (PK)      |
+| `processed_at` | TIMESTAMP   | Processing completion time used for retention    |
+
 ## 🗂 ERD (Entity Relationship Diagram)
 
 ![ERD](/docs/architecture/erd.png)

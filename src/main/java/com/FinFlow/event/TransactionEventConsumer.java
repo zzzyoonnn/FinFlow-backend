@@ -1,27 +1,23 @@
 package com.FinFlow.event;
 
-import com.FinFlow.domain.ProcessedEvent;
-import com.FinFlow.repository.ProcessedEventRepository;
-import com.FinFlow.service.TransactionAuditService;
+import com.FinFlow.service.TransactionAuditEventProcessor;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(name = "finflow.kafka.enabled", havingValue = "true")
 public class TransactionEventConsumer {
-  private final ProcessedEventRepository processedEventRepository;
   private final ObjectMapper objectMapper;
-  private final TransactionAuditService transactionAuditService;
+  private final TransactionAuditEventProcessor eventProcessor;
 
   @KafkaListener(topics = "${finflow.kafka.transaction-topic:finflow.transaction.completed.v1}")
-  @Transactional
   public void consume(String payload) {
     TransactionCompletedEvent event;
     try {
@@ -30,14 +26,12 @@ public class TransactionEventConsumer {
       throw new InvalidEventPayloadException("Malformed transaction event JSON", exception);
     }
     validate(event);
-    if (processedEventRepository.existsById(event.eventId())) {
-      return;
+    if (eventProcessor.process(event)) {
+      log.info("Transaction event processed. eventId={}, transactionId={}",
+          event.eventId(), event.transactionId());
+    } else {
+      log.info("Duplicate transaction event skipped. eventId={}", event.eventId());
     }
-    transactionAuditService.recordFromEvent(event.eventId(), event.transactionId(),
-        event.transactionType(), event.sender(), event.receiver(), event.amount(), event.occurredAt());
-    processedEventRepository.saveAndFlush(new ProcessedEvent(event.eventId()));
-    log.info("Transaction event processed. eventId={}, transactionId={}",
-        event.eventId(), event.transactionId());
   }
 
   private void validate(TransactionCompletedEvent event) {
@@ -49,6 +43,16 @@ public class TransactionEventConsumer {
         || event.sender() == null || event.receiver() == null || event.amount() == null
         || event.occurredAt() == null) {
       throw new InvalidEventPayloadException("Transaction event is missing required fields");
+    }
+    try {
+      UUID.fromString(event.eventId());
+    } catch (IllegalArgumentException exception) {
+      throw new InvalidEventPayloadException("Transaction eventId must be a UUID", exception);
+    }
+    if (event.transactionId() <= 0 || event.amount() <= 0
+        || event.transactionType().isBlank() || event.sender().isBlank()
+        || event.receiver().isBlank()) {
+      throw new InvalidEventPayloadException("Transaction event contains invalid field values");
     }
   }
 }

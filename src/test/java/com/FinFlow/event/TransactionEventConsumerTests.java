@@ -1,17 +1,14 @@
 package com.FinFlow.event;
 
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.FinFlow.domain.ProcessedEvent;
-import com.FinFlow.repository.ProcessedEventRepository;
-import com.FinFlow.service.TransactionAuditService;
+import com.FinFlow.service.TransactionAuditEventProcessor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
 class TransactionEventConsumerTests {
@@ -19,64 +16,64 @@ class TransactionEventConsumerTests {
   private final ObjectMapper objectMapper = Jackson2ObjectMapperBuilder.json().build();
 
   @Test
-  void recordsEventIdWhenEventIsFirstConsumed() throws Exception {
-    ProcessedEventRepository repository = org.mockito.Mockito.mock(ProcessedEventRepository.class);
-    TransactionAuditService auditService = org.mockito.Mockito.mock(TransactionAuditService.class);
-    TransactionEventConsumer consumer = new TransactionEventConsumer(repository, objectMapper, auditService);
-    String payload = payload("event-1");
+  void delegatesValidEventToTransactionalProcessor() throws Exception {
+    TransactionAuditEventProcessor processor = org.mockito.Mockito.mock(
+        TransactionAuditEventProcessor.class);
+    TransactionEventConsumer consumer = new TransactionEventConsumer(objectMapper, processor);
+    String eventId = UUID.randomUUID().toString();
+    String payload = payload(eventId);
 
     consumer.consume(payload);
 
-    ArgumentCaptor<ProcessedEvent> captor = ArgumentCaptor.forClass(ProcessedEvent.class);
-    verify(repository).saveAndFlush(captor.capture());
-    verify(auditService).recordFromEvent(org.mockito.ArgumentMatchers.eq("event-1"),
-        org.mockito.ArgumentMatchers.eq(1L), org.mockito.ArgumentMatchers.eq("TRANSFER"),
-        org.mockito.ArgumentMatchers.eq("111"), org.mockito.ArgumentMatchers.eq("222"),
-        org.mockito.ArgumentMatchers.eq(100L),
-        org.mockito.ArgumentMatchers.any());
-    org.assertj.core.api.Assertions.assertThat(captor.getValue().getEventId()).isEqualTo("event-1");
+    verify(processor).process(org.mockito.ArgumentMatchers.argThat(
+        event -> event.eventId().equals(eventId) && event.transactionId().equals(1L)));
   }
 
   @Test
-  void skipsAlreadyProcessedEvent() throws Exception {
-    ProcessedEventRepository repository = org.mockito.Mockito.mock(ProcessedEventRepository.class);
-    TransactionAuditService auditService = org.mockito.Mockito.mock(TransactionAuditService.class);
-    when(repository.existsById("event-1")).thenReturn(true);
-    TransactionEventConsumer consumer = new TransactionEventConsumer(repository, objectMapper, auditService);
+  void acceptsDuplicateDecisionFromProcessor() throws Exception {
+    TransactionAuditEventProcessor processor = org.mockito.Mockito.mock(
+        TransactionAuditEventProcessor.class);
+    when(processor.process(org.mockito.ArgumentMatchers.any())).thenReturn(false);
+    TransactionEventConsumer consumer = new TransactionEventConsumer(objectMapper, processor);
 
-    consumer.consume(payload("event-1"));
+    consumer.consume(payload(UUID.randomUUID().toString()));
 
-    verify(repository, never()).saveAndFlush(org.mockito.ArgumentMatchers.any());
-    verify(auditService, never()).recordFromEvent(org.mockito.ArgumentMatchers.any(),
-        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    verify(processor).process(org.mockito.ArgumentMatchers.any());
   }
 
   @Test
   void rejectsMalformedJsonWithoutWritingDatabase() {
-    ProcessedEventRepository repository = org.mockito.Mockito.mock(ProcessedEventRepository.class);
-    TransactionAuditService auditService = org.mockito.Mockito.mock(TransactionAuditService.class);
-    TransactionEventConsumer consumer = new TransactionEventConsumer(repository, objectMapper, auditService);
+    TransactionAuditEventProcessor processor = org.mockito.Mockito.mock(
+        TransactionAuditEventProcessor.class);
+    TransactionEventConsumer consumer = new TransactionEventConsumer(objectMapper, processor);
 
     assertThatThrownBy(() -> consumer.consume("not-json"))
         .isInstanceOf(InvalidEventPayloadException.class);
-    verify(auditService, never()).recordFromEvent(org.mockito.ArgumentMatchers.any(),
-        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    verify(processor, org.mockito.Mockito.never()).process(org.mockito.ArgumentMatchers.any());
   }
 
   @Test
   void rejectsUnsupportedSchemaVersion() throws Exception {
-    ProcessedEventRepository repository = org.mockito.Mockito.mock(ProcessedEventRepository.class);
-    TransactionAuditService auditService = org.mockito.Mockito.mock(TransactionAuditService.class);
-    TransactionEventConsumer consumer = new TransactionEventConsumer(repository, objectMapper, auditService);
+    TransactionAuditEventProcessor processor = org.mockito.Mockito.mock(
+        TransactionAuditEventProcessor.class);
+    TransactionEventConsumer consumer = new TransactionEventConsumer(objectMapper, processor);
     String payload = objectMapper.writeValueAsString(new TransactionCompletedEvent(
-        2, "event-1", 1L, "TRANSFER", "111", "222", 100L, LocalDateTime.now()));
+        2, UUID.randomUUID().toString(), 1L, "TRANSFER", "111", "222", 100L,
+        LocalDateTime.now()));
 
     assertThatThrownBy(() -> consumer.consume(payload))
         .isInstanceOf(UnsupportedEventSchemaException.class);
+  }
+
+  @Test
+  void rejectsNonUuidEventId() throws Exception {
+    TransactionAuditEventProcessor processor = org.mockito.Mockito.mock(
+        TransactionAuditEventProcessor.class);
+    TransactionEventConsumer consumer = new TransactionEventConsumer(objectMapper, processor);
+
+    assertThatThrownBy(() -> consumer.consume(payload("event-1")))
+        .isInstanceOf(InvalidEventPayloadException.class);
+    verify(processor, org.mockito.Mockito.never()).process(org.mockito.ArgumentMatchers.any());
   }
 
   private String payload(String eventId) throws Exception {
