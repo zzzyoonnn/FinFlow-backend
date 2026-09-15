@@ -188,5 +188,6 @@ docker compose up -d mysql redis kafka
 - [이체 요청 멱등성](docs/idempotency.md)
 - [k6 이체 멱등성 부하 테스트](docs/k6-load-test.md)
 - [Kafka·Outbox 비교 및 장애 테스트](docs/kafka-benchmark.md)
+- [Kafka 이벤트 처리 테스트 가이드](docs/kafka-tests.md)
 - [Docker Compose 실행 가이드](docs/docker-compose.md)
 - [테이블 구조](docs/table.md)
