@@ -61,13 +61,13 @@ FinFlow는 기본적인 은행 업무를 구현한 개인 포트폴리오 프로
 
 ### 전체 시스템 구성
 
-![FinFlow 아이콘 기반 시스템 아키텍처](docs/architecture/finflow-icon-architecture.png)
+![FinFlow 시스템 아키텍처](docs/architecture/finflow-system-architecture-v3.png)
 
 아이콘 중심 다이어그램은 요청·저장 흐름과 Kafka 이벤트 처리 영역을 함께 보여줍니다.
 
 ### 계층 및 데이터 흐름
 
-![FinFlow 계층 및 데이터 흐름 아키텍처](docs/architecture/finflow-system-architecture.svg)
+![FinFlow 계층 및 데이터 흐름 아키텍처](docs/architecture/finflow-system-architecture-v2.png)
 
 ```text
 Client
