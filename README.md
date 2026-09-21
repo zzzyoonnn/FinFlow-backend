@@ -156,11 +156,31 @@ H2는 빠른 단위·기본 테스트에 사용합니다. 트랜잭션 격리, �
 Docker MySQL과 Redis 기반으로 실행하려면 다음 명령을 사용합니다.
 
 ```bash
-docker compose up -d mysql redis
+docker compose up -d --wait mysql redis
 
 SPRING_PROFILES_ACTIVE=dev,mysql \
 SPRING_JPA_SHOW_SQL=false \
 ./gradlew bootRun
+```
+
+MySQL, Redis, Kafka와 Spring 애플리케이션을 모두 활성화하려면 다음 통합 명령을
+사용합니다. Docker 서비스가 정상 상태가 된 뒤 Spring Boot가 실행됩니다.
+
+```bash
+docker compose up -d --wait mysql redis kafka && \
+SPRING_PROFILES_ACTIVE=dev,mysql \
+KAFKA_ENABLED=true \
+OUTBOX_ENABLED=true \
+AUDIT_MODE=kafka \
+SPRING_JPA_SHOW_SQL=false \
+./gradlew bootRun
+```
+
+애플리케이션은 `http://localhost:8081`에서 실행됩니다. Spring Boot는 `Ctrl+C`로
+종료하고, MySQL·Redis·Kafka 컨테이너는 다음 명령으로 종료합니다.
+
+```bash
+docker compose down
 ```
 
 전체 단위 테스트와 Docker 기반 통합 테스트는 각각 다음과 같이 실행합니다.
@@ -169,7 +189,7 @@ SPRING_JPA_SHOW_SQL=false \
 ./gradlew test
 
 docker compose up -d mysql redis kafka
-./gradlew integrationTest
+RUN_KAFKA_INTEGRATION_TESTS=true ./gradlew integrationTest
 ```
 
 포트, 프로필, Redis 확인, k6 실행과 컨테이너 종료 방법은 [Docker Compose 실행 가이드](docs/docker-compose.md)를 참고합니다.
