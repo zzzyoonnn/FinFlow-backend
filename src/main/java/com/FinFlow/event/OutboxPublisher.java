@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class OutboxPublisher {
   private final OutboxEventRepository outboxEventRepository;
   private final KafkaTemplate<String, String> kafkaTemplate;
+  private final EventProcessingMetrics metrics;
 
   @Value("${finflow.kafka.transaction-topic:finflow.transaction.completed.v1}")
   private String topic;
@@ -37,8 +38,10 @@ public class OutboxPublisher {
       try {
         kafkaTemplate.send(topic, event.getAggregateId(), event.getPayload()).get(10, TimeUnit.SECONDS);
         event.published();
+        metrics.published();
       } catch (Exception exception) {
         event.publishFailed(exception, maxAttempts);
+        metrics.publishFailed();
         log.warn("Outbox publish failed. eventId={}, retryCount={}, status={}",
             event.getEventId(), event.getRetryCount(), event.getStatus(), exception);
       }

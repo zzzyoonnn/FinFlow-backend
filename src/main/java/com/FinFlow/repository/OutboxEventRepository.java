@@ -10,6 +10,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface OutboxEventRepository extends JpaRepository<OutboxEvent, String> {
+  long countByStatus(OutboxStatus status);
+
   @Query(value = """
       SELECT * FROM outbox_event
       WHERE status = :status AND next_attempt_at <= :now

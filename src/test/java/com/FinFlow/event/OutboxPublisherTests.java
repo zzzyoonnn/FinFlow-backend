@@ -28,7 +28,8 @@ class OutboxPublisherTests {
         .thenReturn(List.of(event));
     when(kafkaTemplate.send(anyString(), anyString(), anyString()))
         .thenReturn(CompletableFuture.completedFuture(null));
-    OutboxPublisher publisher = new OutboxPublisher(repository, kafkaTemplate);
+    OutboxPublisher publisher = new OutboxPublisher(repository, kafkaTemplate,
+        mock(EventProcessingMetrics.class));
     ReflectionTestUtils.setField(publisher, "topic", "transactions");
     ReflectionTestUtils.setField(publisher, "maxAttempts", 5);
 
@@ -49,7 +50,8 @@ class OutboxPublisherTests {
         .thenReturn(List.of(event));
     when(kafkaTemplate.send(anyString(), anyString(), anyString()))
         .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("broker unavailable")));
-    OutboxPublisher publisher = new OutboxPublisher(repository, kafkaTemplate);
+    OutboxPublisher publisher = new OutboxPublisher(repository, kafkaTemplate,
+        mock(EventProcessingMetrics.class));
     ReflectionTestUtils.setField(publisher, "topic", "transactions");
     ReflectionTestUtils.setField(publisher, "maxAttempts", 5);
 

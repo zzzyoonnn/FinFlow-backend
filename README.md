@@ -139,7 +139,7 @@ AWS 배포는 로컬 Docker 환경에서 Kafka와 Outbox의 정확성·성능 �
 | DB 통합 테스트 | 커밋·롤백, 락, 멱등성 유니크 제약 | Docker Compose MySQL |
 | Redis 통합 테스트 | SET NX 선점, 완료 응답 캐시, 동시 요청 | Docker Compose Redis·MySQL |
 | 부하 테스트 | DB 재시도와 Redis 캐시 비교, SET NX 경합 | Docker Compose, k6 |
-| Kafka 테스트 | 발행 성공·실패 재시도, 중복 소비 방지 | 단위 테스트, Docker Compose Kafka·MySQL |
+| Kafka 테스트 | 롤백·발행 복구·재전달·중복 소비·DLQ | Testcontainers Kafka·MySQL |
 
 H2는 빠른 단위·기본 테스트에 사용합니다. 트랜잭션 격리, 비관적 락, 유니크 제약과 Redis 동시성처럼 실제 인프라 동작이 중요한 기능은 Docker MySQL과 Redis에서 검증합니다.
 
@@ -189,5 +189,6 @@ docker compose up -d mysql redis kafka
 - [k6 이체 멱등성 부하 테스트](docs/k6-load-test.md)
 - [Kafka·Outbox 비교 및 장애 테스트](docs/kafka-benchmark.md)
 - [Kafka 이벤트 처리 테스트 가이드](docs/kafka-tests.md)
+- [Kafka Outbox 운영 준비](docs/operations-readiness.md)
 - [Docker Compose 실행 가이드](docs/docker-compose.md)
 - [테이블 구조](docs/table.md)

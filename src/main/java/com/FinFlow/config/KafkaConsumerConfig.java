@@ -14,6 +14,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.RetryListener;
 import org.springframework.util.backoff.FixedBackOff;
 
 @Configuration
@@ -24,7 +25,8 @@ public class KafkaConsumerConfig {
   public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, String> kafkaTemplate,
       @Value("${finflow.kafka.consumer.retry-interval:1000}") long retryInterval,
       @Value("${finflow.kafka.consumer.max-retries:3}") long maxRetries,
-      @Value("${finflow.kafka.consumer.dlq-suffix:.dlq}") String dlqSuffix) {
+      @Value("${finflow.kafka.consumer.dlq-suffix:.dlq}") String dlqSuffix,
+      com.FinFlow.event.EventProcessingMetrics metrics) {
     DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
         (record, exception) -> new TopicPartition(record.topic() + dlqSuffix, record.partition()));
     DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer,
@@ -32,6 +34,19 @@ public class KafkaConsumerConfig {
     errorHandler.addNotRetryableExceptions(InvalidEventPayloadException.class,
         UnsupportedEventSchemaException.class);
     errorHandler.setCommitRecovered(true);
+    errorHandler.setRetryListeners(new RetryListener() {
+      @Override
+      public void failedDelivery(org.apache.kafka.clients.consumer.ConsumerRecord<?, ?> record,
+          Exception exception, int deliveryAttempt) {
+        metrics.consumerFailed();
+      }
+
+      @Override
+      public void recovered(org.apache.kafka.clients.consumer.ConsumerRecord<?, ?> record,
+          Exception exception) {
+        metrics.deadLettered();
+      }
+    });
     return errorHandler;
   }
 

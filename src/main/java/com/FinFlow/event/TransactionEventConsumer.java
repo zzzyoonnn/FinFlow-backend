@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 public class TransactionEventConsumer {
   private final ObjectMapper objectMapper;
   private final TransactionAuditEventProcessor eventProcessor;
+  private final EventProcessingMetrics metrics;
 
   @KafkaListener(topics = "${finflow.kafka.transaction-topic:finflow.transaction.completed.v1}")
   public void consume(String payload) {
@@ -27,9 +28,11 @@ public class TransactionEventConsumer {
     }
     validate(event);
     if (eventProcessor.process(event)) {
+      metrics.consumed();
       log.info("Transaction event processed. eventId={}, transactionId={}",
           event.eventId(), event.transactionId());
     } else {
+      metrics.duplicate();
       log.info("Duplicate transaction event skipped. eventId={}", event.eventId());
     }
   }

@@ -2,9 +2,9 @@
 
 ## 1. 문서 목적
 
-FinFlow의 Kafka 관련 테스트는 Transactional Outbox 발행과 거래 감사 로그 Consumer의
-핵심 동작을 빠르게 검증한다. 현재 테스트는 실제 Kafka 브로커를 사용하는 E2E 테스트가
-아니라 Mockito와 H2를 사용하는 단위·JPA 슬라이스 테스트다.
+FinFlow의 Kafka 관련 테스트는 빠른 Mockito/H2 테스트와 실제 MySQL·Kafka 장애 통합
+테스트의 두 계층으로 구성된다. 이 문서의 2~6절은 빠른 테스트를 설명하며, 실제 브로커
+검증은 7절과 [운영 준비 문서](operations-readiness.md)를 따른다.
 
 이 문서는 다음 내용을 구분한다.
 
@@ -194,28 +194,24 @@ Outbox 발행 실패
 Kafka의 at-least-once 전달을 전제로 하되, `eventId`와 DB 트랜잭션을 이용해 감사 로그의
 업무 결과가 중복 반영되지 않도록 검증한다.
 
-## 7. 현재 테스트가 보장하지 않는 범위
+## 7. 실제 MySQL·Kafka 통합 테스트
 
-다음 항목은 현재 테스트에 포함되지 않는다.
+`KafkaOutboxIntegrationTest`가 다음 항목을 실제 컨테이너로 검증한다.
 
 - 실제 Kafka 브로커를 통한 생산·소비 E2E 흐름
-- DB 커밋 후 offset 커밋 전에 Consumer를 종료하는 장애 시나리오
-- `DefaultErrorHandler`의 실제 재시도 횟수와 DLQ 발행 결과
-- 같은 이벤트를 여러 Consumer가 동시에 처리하는 경쟁 상황
-- MySQL에서의 실제 `FOR UPDATE SKIP LOCKED` 동작
-- Kafka 중단 후 Outbox backlog 복구 시간
-- Consumer lag 및 처리량 측정
+- DB 롤백 시 Outbox 미생성 및 커밋 이벤트만 발행
+- 동일 이벤트 중복 전달의 단일 후속 처리
+- `DefaultErrorHandler`의 실제 재전달 횟수와 DLQ 발행
+- Kafka 중단 후 `PENDING` Outbox 재발행
 
-이 범위를 검증하는 테스트를 추가한다면 실제 외부 인프라가 필요하므로 클래스명을
-`*IntegrationTest`로 작성하고 `integrationTest` 태스크에서 실행하는 것이 적절하다.
-
-예시는 다음과 같다.
-
-```text
-TransactionEventConsumerIntegrationTest
-OutboxPublisherIntegrationTest
-KafkaRecoveryIntegrationTest
+```bash
+RUN_KAFKA_INTEGRATION_TESTS=true ./gradlew integrationTest \
+  --tests com.FinFlow.event.KafkaOutboxIntegrationTest
 ```
+
+Consumer 프로세스를 offset commit 직전에 강제 종료하는 테스트와 다중 Publisher의
+`SKIP LOCKED` 경쟁 테스트는 아직 수동 chaos 검증 범위다. lag와 처리량은 Actuator
+Prometheus 지표 및 k6 하네스로 측정한다.
 
 ## 8. 테스트 선택 기준
 

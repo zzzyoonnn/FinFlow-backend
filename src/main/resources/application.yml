@@ -1,4 +1,6 @@
 spring:
+  flyway:
+    enabled: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -41,3 +43,16 @@ finflow:
       outbox-retention: ${OUTBOX_RETENTION:7d}
       failed-retention: ${FAILED_OUTBOX_RETENTION:30d}
       processed-retention: ${PROCESSED_EVENT_RETENTION:30d}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: finflow
