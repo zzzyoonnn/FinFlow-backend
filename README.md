@@ -1,219 +1,251 @@
-# FinFlow 💸
+# FinFlow
 
-Spring Boot 기반 금융 거래 API입니다. 계좌 생성, 입금, 출금, 이체 기능을 제공하며, 단순 CRUD를 넘어 트랜잭션 원자성, 동시성 충돌, 중복 요청과 같은 금융 거래의 정합성 문제를 단계적으로 해결합니다.
+> 동시 요청과 장애 상황에서도 거래 정합성을 지키는 금융 거래 API
+
+FinFlow는 회원, 계좌, 입금·출금·이체 기능을 제공하는 Spring Boot 기반 백엔드 프로젝트입니다. 단순한 금융 CRUD 구현을 넘어, 실제 거래 시스템에서 문제가 되는 **동시성 충돌**, **중복 요청**, **DB와 메시지 브로커 간 Dual Write**를 다룹니다.
+
+- 비관적 락과 일관된 락 순서로 계좌 잔액 충돌을 제어합니다.
+- `Idempotency-Key`, MySQL 유니크 제약, Redis 캐시를 조합해 중복 이체를 방지합니다.
+- Transactional Outbox로 거래 저장과 Kafka 이벤트 발행 사이의 유실 가능성을 줄입니다.
+- 멱등 Consumer와 DLQ로 at-least-once 전달 환경의 중복·실패를 처리합니다.
+- 단위 테스트, 실제 인프라 통합 테스트, k6 부하 테스트로 주요 보장을 검증합니다.
 
 ## 목차
 
-- [프로젝트 소개](#프로젝트-소개)
-- [주요 기능](#주요-기능)
+- [핵심 설계](#핵심-설계)
+- [아키텍처](#아키텍처)
 - [기술 스택](#기술-스택)
-- [아키텍처와 거래 처리](#아키텍처와-거래-처리)
-- [구현 현황](#구현-현황)
-- [이벤트 처리](#이벤트-처리)
-- [테스트 전략](#테스트-전략)
-- [실행 방법](#실행-방법)
-- [프로젝트 마무리](#프로젝트-마무리)
-- [상세 문서](#상세-문서)
+- [API](#api)
+- [시작하기](#시작하기)
+- [환경 설정](#환경-설정)
+- [테스트](#테스트)
+- [관측과 운영](#관측과-운영)
+- [프로젝트 구조](#프로젝트-구조)
+- [문서](#문서)
 
-## 프로젝트 소개
+## 핵심 설계
 
-FinFlow는 기본적인 은행 업무를 구현한 개인 포트폴리오 프로젝트입니다. 이체 과정에서 발생할 수 있는 부분 성공, 잔액 갱신 충돌, 네트워크 재시도로 인한 중복 거래를 데이터베이스와 Redis를 이용해 방지합니다.
+| 문제 | 해결 방법 | 최종 보장 주체 |
+| --- | --- | --- |
+| 동시에 같은 계좌 잔액 변경 | `PESSIMISTIC_WRITE` 락, 계좌번호 오름차순 락 획득 | MySQL 트랜잭션 |
+| 네트워크 재시도로 동일 이체 중복 실행 | 요청 해시와 `Idempotency-Key` 검증 | `idempotency_record` 유니크 제약 |
+| 진행 중인 동일 요청의 동시 진입 | Redis `SET NX`와 processing TTL | Redis 선점 + DB 폴백 |
+| 완료된 요청의 반복 처리 비용 | 완료 응답을 Redis에 24시간 캐시 | MySQL 멱등성 레코드 |
+| 거래 커밋 후 이벤트 발행 실패 | 거래와 Outbox 이벤트를 한 트랜잭션에 저장 | Transactional Outbox |
+| Kafka 이벤트 중복 전달 | `eventId` 기반 처리 이력 저장 | `processed_event` 유니크 제약 |
+| Consumer 처리 실패 | 재시도 후 DLQ 전송, 정상 처리 후 offset 커밋 | Kafka + Consumer 트랜잭션 |
 
-핵심 원칙은 다음과 같습니다.
+### 이체 정합성
 
-- 계좌 잔액과 거래내역의 정합성은 MySQL 트랜잭션이 보장합니다.
-- 동일 계좌의 동시 변경은 비관적 락으로 순차 처리합니다.
-- 중복 이체는 `Idempotency-Key`로 식별하고 DB 유니크 제약으로 최종 차단합니다.
-- Redis는 진행 중 요청 차단과 완료 응답 캐시를 담당하는 보조 계층입니다.
-- 이체 완료 이벤트는 Transactional Outbox를 거쳐 Kafka로 발행합니다.
+이체 시 출금·입금 계좌를 하나의 DB 트랜잭션에서 변경하고 거래내역과 멱등성 레코드도 함께 저장합니다. 두 계좌는 계좌번호 오름차순으로 잠가 반대 방향의 동시 이체에서도 데드락 가능성을 낮췄습니다. 과정 중 하나라도 실패하면 잔액과 거래내역이 모두 롤백됩니다.
 
-## 주요 기능
+### 다층 멱등성
 
-- 회원가입, BCrypt 비밀번호 암호화
-- JWT 발급·검증 기반 stateless 인증·인가
-- 계좌 생성, 조회, 삭제
-- 입금 및 출금
-- 계좌 간 이체
-- 계좌별 거래내역 유형 필터링 및 페이징 조회
-- Spring AOP 기반 요청값 검증
-- 전역 예외 처리 및 공통 응답 형식
-- 멱등성 키 기반 중복 이체 방지
-- Redis 기반 진행 중 요청 차단 및 완료 응답 캐시
-- Transactional Outbox 기반 Kafka 이벤트 발행과 멱등 소비
+```text
+Idempotency-Key + 요청 해시 검증
+  → Redis 완료 응답 조회
+  → SET NX로 처리 권한 선점
+  → 계좌 락 및 이체 트랜잭션
+  → DB 멱등성 레코드 저장
+  → 커밋 후 Redis 응답 캐시
+```
+
+같은 키와 다른 요청 본문을 함께 보내면 충돌로 처리합니다. Redis가 비활성화되거나 장애가 발생해도 DB 경로로 폴백하며, Redis TTL 만료 후에도 DB 유니크 제약이 중복 거래를 최종 차단합니다.
+
+### 신뢰할 수 있는 이벤트 처리
+
+거래 데이터와 Outbox 이벤트를 같은 트랜잭션으로 커밋한 뒤 Polling Publisher가 Kafka에 발행합니다. Consumer는 감사 로그와 처리 이력을 하나의 트랜잭션으로 저장하므로, 재전달된 이벤트를 안전하게 무시할 수 있습니다. 재시도 한도를 초과한 이벤트는 DLQ로 분리합니다.
+
+이 구조의 전달 보장은 **at-least-once 발행 + 멱등 소비**입니다. Kafka가 계좌 락이나 핵심 이체 처리량 자체를 확장해 주는 것은 아니며, 거래 이후의 감사·알림·통계 작업을 분리하는 역할을 합니다.
+
+## 아키텍처
+
+![FinFlow 시스템 아키텍처](docs/architecture/finflow-system-architecture-v3.png)
+
+```text
+Client
+  └─ Spring Security / JWT
+      └─ Controller → Service → Repository
+          ├─ MySQL: 계좌, 거래, 멱등성, Outbox의 최종 저장소
+          ├─ Redis: 진행 중 요청 선점 및 완료 응답 캐시
+          └─ Outbox Publisher → Kafka → Consumer
+                                      ├─ 감사 로그
+                                      ├─ 처리 이력
+                                      └─ 재시도 / DLQ
+```
+
+애플리케이션은 Controller–Service–Repository 레이어를 분리하고, 서비스 계층을 트랜잭션 경계로 사용합니다. 운영 스키마 변경은 Flyway 마이그레이션으로 관리합니다.
 
 ## 기술 스택
 
 | 구분 | 기술 |
 | --- | --- |
 | Language | Java 21 |
-| Framework | Spring Boot 3.5.7, Spring AOP, Bean Validation |
-| Persistence | Spring Data JPA, JPQL |
-| Security | Spring Security, JWT |
-| Database | H2, MySQL 8.4 |
-| Cache | Redis 7.4, Spring Data Redis |
-| Test | JUnit 5, Mockito, Spring Boot Test, k6 |
-| Infrastructure | Docker Compose |
-| Messaging | Apache Kafka, Spring Kafka, Transactional Outbox |
+| Framework | Spring Boot 3.5.7, Spring MVC, Spring AOP, Bean Validation |
+| Security | Spring Security, JWT, BCrypt |
+| Persistence | Spring Data JPA, JPQL, Flyway |
+| Database | MySQL 8.4, H2 |
+| Cache | Redis 7.4 |
+| Messaging | Apache Kafka 3.9, Spring Kafka, Transactional Outbox |
+| Observability | Spring Boot Actuator, Micrometer, Prometheus |
+| Test | JUnit 5, Mockito, Testcontainers, Awaitility, k6 |
+| Infrastructure | Docker Compose, Gradle |
 
-## 아키텍처와 거래 처리
+## API
 
-레이어드 아키텍처를 적용했습니다.
+인증이 필요한 경로에는 `Authorization: Bearer <token>` 헤더를 전달합니다. 이체 API는 추가로 `Idempotency-Key`가 필요합니다.
 
-### 전체 시스템 구성
+| Method | Endpoint | 인증 | 설명 |
+| --- | --- | :---: | --- |
+| `POST` | `/api/join` | - | 회원가입 |
+| `POST` | `/api/login` | - | 로그인 및 JWT 발급 |
+| `POST` | `/api/s/account` | O | 계좌 생성 |
+| `GET` | `/api/s/account/loginUser` | O | 내 계좌 목록 조회 |
+| `GET` | `/api/s/account/{number}` | O | 계좌 상세 조회 |
+| `DELETE` | `/api/s/account/{number}` | O | 계좌 삭제 |
+| `POST` | `/api/account/deposit` | - | 입금 |
+| `POST` | `/api/s/account/withdraw` | O | 출금 |
+| `POST` | `/api/s/account/transfer` | O | 멱등 이체 |
+| `GET` | `/api/s/account/{number}/transaction` | O | 거래내역 필터·페이징 조회 |
 
-![FinFlow 시스템 아키텍처](docs/architecture/finflow-system-architecture-v3.png)
+로그인 성공 시 JWT는 응답의 `Authorization` 헤더에 담깁니다. 거래내역 조회는 `transaction_type`(`ALL`, `DEPOSIT`, `WITHDRAW`)과 0부터 시작하는 `page` 쿼리 파라미터를 지원합니다.
 
-아이콘 중심 다이어그램은 요청·저장 흐름과 Kafka 이벤트 처리 영역을 함께 보여줍니다.
+## 시작하기
 
-### 계층 및 데이터 흐름
+### 사전 요구사항
 
-![FinFlow 계층 및 데이터 흐름 아키텍처](docs/architecture/finflow-system-architecture-v2.png)
+- JDK 21
+- Docker 및 Docker Compose
 
-```text
-Client
-  → Controller: HTTP 요청·응답, 인증 사용자 식별
-  → Service: 비즈니스 규칙, 트랜잭션 경계
-  → Repository: JPA 기반 영속성 처리
-  → MySQL: 계좌 잔액, 거래내역, 멱등성 기록의 최종 저장소
-```
+### 1. 빠른 실행 — H2
 
-Redis가 활성화된 이체 요청은 다음 순서로 처리됩니다.
-
-```text
-Idempotency-Key와 요청 해시 검증
-  → Redis 완료 응답 조회
-  → SET NX로 진행 중 요청 선점
-  → 출금·입금 계좌 비관적 락 획득
-  → 잔액 변경, 거래내역과 멱등성 레코드 저장
-  → MySQL 트랜잭션 커밋
-  → Redis 완료 응답 캐시
-```
-
-Redis가 비활성화되거나 장애가 발생하면 DB 경로로 폴백합니다. Redis TTL이 만료되어도 멱등성 기록 테이블의 유니크 제약이 중복 이체를 최종 차단합니다.
-
-이체 대상 두 계좌의 락은 계좌번호 오름차순으로 획득해 반대 방향 이체가 동시에 발생할 때의 데드락 가능성을 낮춥니다.
-
-## 구현 현황
-
-| 단계 | 상태 | 구현 및 검증 내용 |
-| --- | --- | --- |
-| 회원·계좌·거래 API | 완료 | 회원가입, 계좌 CRUD, 입금·출금·이체, 계좌별 거래내역 조회 |
-| JWT 인증·인가 | 완료 | 로그인 필터에서 JWT 발급, 요청별 토큰 검증, stateless SecurityContext 구성 |
-| 비밀번호·접근 제어 | 완료 | BCrypt 암호화, 인증 필요 경로와 관리자 역할 기반 접근 정책 |
-| Spring AOP 요청 검증 | 완료 | POST·PUT 요청의 `BindingResult` 오류를 가로채 필드별 검증 오류 반환 |
-| 공통 예외·응답 처리 | 완료 | `@RestControllerAdvice`와 `ResponseDTO` 기반 성공·실패 응답 일관화 |
-| 거래내역 조회 | 완료 | JPQL 동적 쿼리, 입금·출금·전체 필터, Fetch Join, 페이지당 5건 조회 |
-| JPA Auditing | 완료 | 엔티티 생성·수정 시각 자동 기록 |
-| DB 트랜잭션과 실패 롤백 | 완료 | 거래내역 저장 실패 시 두 계좌 잔액과 거래내역 전체 롤백 |
-| 계좌 동시성 제어 | 완료 | 낙관적 락 비교, 비관적 락 적용, MySQL 동시 요청 테스트 |
-| DB 멱등성 | 완료 | `Idempotency-Key`, 요청 해시, 멱등성 기록과 유니크 제약 |
-| Redis 멱등성 | 완료 | `SET NX` 처리 선점, 완료 응답 캐시, TTL과 DB 폴백 |
-| 부하 테스트 | 완료 | DB 재시도·Redis 캐시 적중 비교, SET NX 최초 경합 시나리오 |
-| Kafka 이벤트 처리 | 완료 | Transactional Outbox 기반 이체 완료 이벤트 발행·멱등 소비 |
-
-## 이벤트 처리
-
-### Kafka와 Transactional Outbox 기반 거래 이벤트 처리
-
-- 거래 데이터와 Outbox 이벤트를 하나의 DB 트랜잭션으로 저장합니다.
-- 커밋된 Outbox 이벤트만 Kafka에 발행합니다.
-- 알림, 감사 로그, 통계, 이상 거래 탐지 같은 후속 작업을 API 요청에서 분리합니다.
-- `eventId`를 기준으로 Consumer의 중복 처리를 방지합니다.
-- Consumer는 이벤트를 검증한 뒤 감사 로그와 `processed_event`를 하나의 DB 트랜잭션으로
-  저장합니다. 두 저장 중 하나라도 실패하면 모두 롤백되며, Listener가 정상 반환한 뒤에만
-  Kafka offset이 커밋됩니다.
-- 계좌 또는 거래 단위의 이벤트 순서를 고려해 파티션 키를 설계합니다.
-- 발행 실패 시 최대 5분의 지수 백오프로 재시도합니다.
-- payload에 스키마 버전을 포함하고, 거래 ID를 Kafka 파티션 키로 사용합니다.
-- 재시도 가능한 Consumer 오류는 설정된 횟수만큼 재전달한 뒤 DLQ로 이동합니다.
-- Actuator와 Prometheus 지표로 Outbox 적체, 발행 실패, Consumer 실패·중복·DLQ를 관찰합니다.
-- 스케줄러가 보존 기간이 지난 `PUBLISHED`·`FAILED` Outbox와 `processed_event`를 정리합니다.
-
-Kafka는 후속 작업을 비동기화하고 독립적으로 확장하기 위한 수단입니다. 계좌 락과 MySQL 쓰기가 포함된 핵심 이체 처리량 자체를 자동으로 확장하지는 않으므로, 일반 이체와 동일 계좌 집중 트래픽을 분리해 포화 지점과 복구 시간을 계속 검증해야 합니다.
-
-로컬 Docker 환경에서 Kafka와 Outbox의 정확성·성능 검증을 완료했으며, 마지막 단계로 AWS 환경에 배포할 예정입니다.
-
-## 테스트 전략
-
-| 범위 | 검증 대상 | 환경 |
-| --- | --- | --- |
-| 단위 테스트 | 서비스 분기, 인증·인가, 요청 검증 | JUnit 5, Mockito, H2 |
-| DB 통합 테스트 | 커밋·롤백, 락, 멱등성 유니크 제약 | Docker Compose MySQL |
-| Redis 통합 테스트 | SET NX 선점, 완료 응답 캐시, 동시 요청 | Docker Compose Redis·MySQL |
-| 부하 테스트 | DB 재시도와 Redis 캐시 비교, SET NX 경합 | Docker Compose, k6 |
-| Kafka 테스트 | 롤백·발행 복구·재전달·중복 소비·DLQ | Testcontainers Kafka·MySQL |
-
-H2는 빠른 단위·기본 테스트에 사용합니다. 트랜잭션 격리, 비관적 락, 유니크 제약과 Redis 동시성처럼 실제 인프라 동작이 중요한 기능은 Docker MySQL과 Redis에서 검증합니다.
-
-## 실행 방법
-
-기본 프로필은 H2 인메모리 데이터베이스를 사용합니다.
+기본 `dev` 프로필은 H2 인메모리 데이터베이스를 사용합니다.
 
 ```bash
 ./gradlew bootRun
 ```
 
-Docker MySQL과 Redis 기반으로 실행하려면 다음 명령을 사용합니다.
+서버는 `http://localhost:8081`에서 실행됩니다.
+
+### 2. 전체 인프라 실행 — MySQL, Redis, Kafka
 
 ```bash
-docker compose up -d --wait mysql redis
+docker compose up -d --wait mysql redis kafka
 
 SPRING_PROFILES_ACTIVE=dev,mysql \
 SPRING_JPA_SHOW_SQL=false \
-./gradlew bootRun
-```
-
-MySQL, Redis, Kafka와 Spring 애플리케이션을 모두 활성화하려면 다음 통합 명령을
-사용합니다. Docker 서비스가 정상 상태가 된 뒤 Spring Boot가 실행됩니다.
-
-```bash
-docker compose up -d --wait mysql redis kafka && \
-SPRING_PROFILES_ACTIVE=dev,mysql \
 KAFKA_ENABLED=true \
 OUTBOX_ENABLED=true \
 AUDIT_MODE=kafka \
-SPRING_JPA_SHOW_SQL=false \
 ./gradlew bootRun
 ```
 
-애플리케이션은 `http://localhost:8081`에서 실행됩니다. Spring Boot는 `Ctrl+C`로
-종료하고, MySQL·Redis·Kafka 컨테이너는 다음 명령으로 종료합니다.
+인프라 상태를 확인하거나 종료하려면 다음 명령을 사용합니다.
 
 ```bash
+docker compose ps
 docker compose down
 ```
 
-전체 단위 테스트와 Docker 기반 통합 테스트는 각각 다음과 같이 실행합니다.
+> `docker compose down -v`는 MySQL과 Redis 볼륨까지 삭제합니다. 로컬 데이터 초기화가 필요한 경우에만 사용하세요.
+
+### 로컬 포트
+
+| 구성 요소 | 포트 |
+| --- | ---: |
+| Spring Boot | `8081` |
+| MySQL | `3307` |
+| Redis | `6380` |
+| Kafka | `9092` |
+
+## 환경 설정
+
+로컬 실행에는 기본값이 제공됩니다. 다른 인프라를 사용할 때만 값을 덮어쓰면 됩니다.
+
+| 환경 변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `SPRING_PROFILES_ACTIVE` | `dev` | 활성 Spring 프로필 |
+| `MYSQL_HOST` / `MYSQL_PORT` | `localhost` / `3307` | MySQL 접속 정보 |
+| `MYSQL_DATABASE` | `finflow` | MySQL 데이터베이스 |
+| `MYSQL_USERNAME` / `MYSQL_PASSWORD` | `finflow` / `finflow` | MySQL 인증 정보 |
+| `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6380` | Redis 접속 정보 |
+| `FINFLOW_IDEMPOTENCY_REDIS_ENABLED` | `true` (`mysql` 프로필) | Redis 멱등성 계층 활성화 |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka 브로커 |
+| `KAFKA_ENABLED` | `false` | Kafka 발행·소비 활성화 |
+| `OUTBOX_ENABLED` | `true` | Outbox Publisher 활성화 |
+| `AUDIT_MODE` | `none` | 감사 처리 모드 (`none`, `sync`, `kafka`) |
+
+운영 환경은 `prod` 프로필과 `rds.hostname`, `rds.port`, `rds.db.name`, `rds.username`, `rds.password` 속성을 사용하며, Flyway가 스키마를 검증·마이그레이션합니다. 전체 옵션은 [`application.yml`](src/main/resources/application.yml)과 [`application-prod.yml`](src/main/resources/application-prod.yml)을 참고하세요.
+
+## 테스트
+
+### 단위 및 기본 통합 테스트
+
+외부 인프라가 필요하지 않은 테스트를 실행합니다.
 
 ```bash
 ./gradlew test
+```
 
-docker compose up -d mysql redis kafka
+### 실제 인프라 통합 테스트
+
+MySQL·Redis 기반 동시성/롤백/멱등성 테스트와, 설정 시 Kafka 통합 테스트를 실행합니다.
+
+```bash
+docker compose up -d --wait mysql redis kafka
 RUN_KAFKA_INTEGRATION_TESTS=true ./gradlew integrationTest
 ```
 
-포트, 프로필, Redis 확인, k6 실행과 컨테이너 종료 방법은 [Docker Compose 실행 가이드](docs/docker-compose.md)를 참고합니다.
+| 범위 | 주요 검증 내용 |
+| --- | --- |
+| 서비스·컨트롤러 | 비즈니스 분기, 인증·인가, 입력 검증 |
+| MySQL | 트랜잭션 롤백, 비관적 락, 유니크 제약 |
+| Redis | `SET NX` 최초 선점, 캐시 적중, DB 폴백 |
+| Kafka | Outbox 복구, 재전달, 중복 소비, DLQ |
+| k6 | DB-only/Redis 비교, 동일 키 경합, 지속·증가·피크 부하 |
 
-## 프로젝트 마무리
+k6 실행법과 결과 해석은 [부하 테스트 가이드](docs/k6-load-test.md), Kafka 성능 비교는 [Kafka·Outbox 벤치마크](docs/kafka-benchmark.md)에 정리되어 있습니다.
 
-FinFlow는 금융 거래에서 발생할 수 있는 동시성 충돌, 중복 요청, 이벤트 유실 문제를
-해결하는 것을 목표로 구현했습니다.
+## 관측과 운영
 
-비관적 락과 멱등성 키로 거래 정합성을 보장하고, Redis를 통해 중복 요청 처리 비용을
-줄였습니다. 또한 Transactional Outbox와 Kafka 기반 이벤트 처리를 적용해 거래 저장과
-후속 작업을 안정적으로 분리했습니다.
+Actuator는 `health`, `info`, `metrics`, `prometheus` 엔드포인트를 노출합니다. 다음 항목을 중심으로 Outbox 및 Consumer 상태를 관찰할 수 있습니다.
 
-핵심 기능과 장애 시나리오 검증을 완료했으며, 이후에는 AWS 환경에 배포하여 실제 운영
-환경에서 프로젝트를 실행하는 단계만 진행할 예정입니다.
+- 미발행 Outbox 적체와 가장 오래된 이벤트의 대기 시간
+- 발행 성공·실패 및 재시도 횟수
+- Consumer 처리 성공·실패·중복·DLQ 건수
+- 보존 기간이 지난 Outbox와 처리 이력 정리 상태
 
-## 상세 문서
+운영 마이그레이션, 알람 기준, 데이터 보존 정책은 [운영 준비 문서](docs/operations-readiness.md)를 참고하세요.
 
+## 프로젝트 구조
+
+```text
+src/main/java/com/FinFlow
+├── config/        # Security, JWT, Kafka 및 초기 데이터 설정
+├── controller/    # 회원·계좌·거래 API
+├── domain/        # JPA 엔티티와 도메인 타입
+├── dto/           # 요청·응답 모델
+├── event/         # Outbox Publisher, Kafka Consumer, 메트릭·정리 작업
+├── repository/    # JPA Repository와 거래 조회 구현
+└── service/       # 거래, 멱등성, 감사 로그 비즈니스 로직
+
+src/main/resources
+├── db/migration/  # Flyway 스키마
+└── application-*.yml
+
+loadtest/          # k6 시나리오와 벤치마크 스크립트
+docs/              # 설계·검증·운영 문서
+```
+
+## 문서
+
+- [ADR: Kafka Transactional Outbox 도입](docs/adr/ADR-001-kafka-transactional-outbox.md)
 - [거래 처리와 DB 트랜잭션](docs/transaction.md)
 - [계좌 잔액 동시성 제어](docs/concurrency-lock.md)
 - [이체 요청 멱등성](docs/idempotency.md)
-- [k6 이체 멱등성 부하 테스트](docs/k6-load-test.md)
-- [Kafka·Outbox 비교 및 장애 테스트](docs/kafka-benchmark.md)
-- [Kafka 이벤트 처리 테스트 가이드](docs/kafka-tests.md)
-- [Kafka Outbox 운영 준비](docs/operations-readiness.md)
+- [테이블 구조와 ERD](docs/table.md)
 - [Docker Compose 실행 가이드](docs/docker-compose.md)
-- [테이블 구조](docs/table.md)
+- [k6 이체 멱등성 부하 테스트](docs/k6-load-test.md)
+- [Kafka·Outbox 비교 테스트](docs/kafka-benchmark.md)
+- [Kafka 이벤트 처리 테스트](docs/kafka-tests.md)
+- [Kafka Outbox 운영 준비](docs/operations-readiness.md)
